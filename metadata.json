@@ -1,0 +1,7 @@
+{
+  "name": "Tecnoloc - Diagnóstico Técnico Inteligente",
+  "description": "Plataforma avançada de diagnóstico técnico para frotas industriais, integrando análise de manuais e IA para soluções rápidas e precisas.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
