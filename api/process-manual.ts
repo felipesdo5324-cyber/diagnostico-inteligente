@@ -1,8 +1,7 @@
-export default async function handler(req: any, res: any) {
-
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.js";
+import { NextApiRequest, NextApiResponse } from "next";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -35,10 +34,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Dados inválidos" });
     }
 
-    const base64 = btoa(
-  new Uint8Array(arrayBuffer)
-    .reduce((data, byte) => data + String.fromCharCode(byte), "")
-);
+    // Converter base64 para Buffer
+    const buffer = Buffer.from(fileBase64, "base64");
 
     // Upload Storage
     const filePath = `${equipmentId}/${Date.now()}-${fileName}`;
