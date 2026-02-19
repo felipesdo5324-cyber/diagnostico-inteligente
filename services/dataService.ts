@@ -2,13 +2,11 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { MaintenanceLog, Manual } from '../types';
 
-// Função para buscar credenciais priorizando process.env para compatibilidade total
+// Função para buscar credenciais priorizando import.meta.env no navegador
 const getCredential = (key: string): string | undefined => {
   const viteKey = `VITE_${key}`;
-  return (process.env as any)[key] || 
-         (process.env as any)[viteKey] || 
-         (import.meta as any).env?.[viteKey] || 
-         (import.meta as any).env?.[key];
+  return (import.meta.env as any)[viteKey] || 
+         (import.meta.env as any)[key];
 };
 
 let supabaseInstance: SupabaseClient | null = null;
