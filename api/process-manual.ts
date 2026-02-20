@@ -25,44 +25,36 @@ const createChunks = (text: string, size = 1000, overlap = 150) => {
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  console.log('Handler iniciado, method:', req.method);
-
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Metodo nao permitido' });
   }
 
   if (!supabase || !openai) {
-    return res.status(500).json({ success: false, error: 'Variaveis de ambiente do backend nao configuradas.' });
+    return res.status(500).json({ success: false, error: 'Variaveis de ambiente nao configuradas.' });
   }
 
   try {
-    const body = req.body as {
+    const { manualId, filePath, equipmentId } = req.body as {
+      manualId?: string;
       filePath?: string;
-      fileUrl?: string;
-      fileName?: string;
       equipmentId?: string;
     };
 
-    const { filePath, fileUrl, fileName, equipmentId } = body;
-
-    if (!filePath || !equipmentId) {
-      return res.status(400).json({ success: false, error: 'filePath e equipmentId sao obrigatorios' });
+    if (!manualId || !filePath || !equipmentId) {
+      return res.status(400).json({ success: false, error: 'manualId, filePath e equipmentId sao obrigatorios' });
     }
 
     console.log('Baixando arquivo do Storage:', filePath);
-
-    // Baixa o arquivo diretamente do Supabase Storage
     const { data: fileData, error: downloadError } = await supabase.storage
       .from('tecnoloc_assets')
       .download(filePath);
 
     if (downloadError || !fileData) {
-      console.error('Erro ao baixar arquivo', downloadError);
       return res.status(500).json({ success: false, error: downloadError?.message ?? 'Erro ao baixar arquivo' });
     }
 
     const fileBuffer = Buffer.from(await fileData.arrayBuffer());
-    console.log('Processando PDF, tamanho:', fileBuffer.length);
+    console.log('Processando PDF, bytes:', fileBuffer.length);
 
     const pdfResult = await pdfParse(fileBuffer);
     const fullText = pdfResult.text?.trim() ?? '';
@@ -72,42 +64,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const chunks = createChunks(fullText);
-    console.log('Total de chunks:', chunks.length);
+    console.log('Chunks gerados:', chunks.length);
 
-    if (!chunks.length) {
-      return res.status(400).json({ success: false, error: 'Nao foi possivel criar segmentos do conteudo' });
-    }
-
-    // Salva o manual no banco
-    const { data: manualData, error: manualError } = await supabase
-      .from('manuals')
-      .insert({
-        equipment_id: equipmentId,
-        file_path: filePath,
-        file_url: fileUrl ?? null,
-        file_name: fileName ?? null,
-      })
-      .select()
-      .single();
-
-    if (manualError || !manualData) {
-      console.error('Erro ao inserir manual', manualError);
-      return res.status(500).json({ success: false, error: manualError?.message ?? 'Erro ao salvar manual' });
-    }
-
-    console.log('Gerando embeddings, chunks:', chunks.length);
-
-    // Processa em lotes de 100 para evitar timeout
     const BATCH_SIZE = 100;
     for (let batchStart = 0; batchStart < chunks.length; batchStart += BATCH_SIZE) {
-      const batchChunks = chunks.slice(batchStart, batchStart + BATCH_SIZE);
+      const batch = chunks.slice(batchStart, batchStart + BATCH_SIZE);
 
       const embeddingResponse = await openai.embeddings.create({
         model: 'text-embedding-3-small',
-        input: batchChunks,
+        input: batch,
       });
 
-      for (let i = 0; i < batchChunks.length; i++) {
+      for (let i = 0; i < batch.length; i++) {
         const embedding = embeddingResponse.data[i]?.embedding;
         if (!embedding || embedding.length !== 1536) {
           return res.status(500).json({ success: false, error: `Embedding invalido no chunk ${batchStart + i}` });
@@ -116,9 +84,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { error: sectionError } = await supabase
           .from('manual_sections')
           .insert({
-            manual_id: manualData.id,
+            manual_id: manualId,
             equipment_id: equipmentId,
-            content: batchChunks[i],
+            content: batch[i],
             embedding,
           });
 
@@ -129,12 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      manualId: manualData.id,
-      fileUrl: fileUrl ?? null,
-      fileName: fileName ?? null,
-    });
+    return res.status(200).json({ success: true });
   } catch (error: any) {
     console.error('Erro no processamento:', error);
     return res.status(500).json({ success: false, error: error?.message ?? 'Erro interno' });

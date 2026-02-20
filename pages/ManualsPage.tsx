@@ -20,6 +20,7 @@ export default function ManualsPage() {
   const [rlsError, setRlsError] = useState<string | null>(null);
   const [equipmentId, setEquipmentId] = useState('');
   const [uploadLogs, setUploadLogs] = useState<string[]>([]);
+  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   
   const [formData, setFormData] = useState<Omit<Manual, 'id'>>({
     equipment_name: '',
@@ -39,10 +40,10 @@ export default function ManualsPage() {
 
   const createMutation = useMutation({
     mutationFn: (data: Omit<Manual, 'id'>) => dataService.saveManual(data),
-    onSuccess: () => {
+    onSuccess: async (savedManual) => {
       queryClient.invalidateQueries({ queryKey: ['manuals'] });
       setShowForm(false);
-      setFormData({
+      const resetForm = () => setFormData({
         equipment_name: '',
         brand: '',
         model: '',
@@ -52,7 +53,27 @@ export default function ManualsPage() {
         file_url: '',
         file_name: ''
       });
-      toast.success('Manual adicionado com sucesso!');
+      // Se tiver arquivo pendente, processa embeddings em segundo plano
+      if (pendingFilePath && savedManual?.id) {
+        const fp = pendingFilePath;
+        const eqId = equipmentId.trim();
+        setPendingFilePath(null);
+        toast.success('Manual salvo! Processando embeddings...');
+        try {
+          await manualService.processManualSections(
+            savedManual.id,
+            fp,
+            eqId,
+            handleProgressUpdate,
+          );
+          toast.success('Embeddings gerados com sucesso!');
+        } catch (err: any) {
+          toast.error('Manual salvo, mas falha nos embeddings: ' + err.message);
+        }
+      } else {
+        toast.success('Manual adicionado com sucesso!');
+      }
+      resetForm();
     },
     onError: (error: any) => {
       toast.error('Erro ao salvar: ' + error.message);
@@ -89,20 +110,24 @@ export default function ManualsPage() {
     setRlsError(null);
     setUploadLogs([]);
     try {
-      const result = await manualService.uploadAndProcessManual(
+      const result = await manualService.uploadFile(
         file,
         sanitizedEquipmentId,
-        handleProgressUpdate
+        handleProgressUpdate,
       );
+      setPendingFilePath(result.filePath);
       setFormData(prev => ({
         ...prev,
-        file_url: (result as any)?.fileUrl || (result as any)?.file_url || prev.file_url,
-        file_name: (result as any)?.fileName || (result as any)?.file_name || file.name
+        file_url: result.fileUrl,
+        file_name: result.fileName,
       }));
-      toast.success('Manual enviado para processamento!');
+      toast.success('Arquivo enviado! Preencha os dados e salve o manual.');
     } catch (error: any) {
       console.error('[ManualsPage] erro no upload', error);
-      toast.error(error?.message || 'Erro ao processar manual');
+      toast.error(error?.message || 'Erro ao enviar arquivo');
+      if (error?.message?.toLowerCase().includes('rls') || error?.message?.toLowerCase().includes('policy')) {
+        setRlsError(error.message);
+      }
     } finally {
       setIsUploading(false);
     }

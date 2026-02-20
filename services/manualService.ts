@@ -2,22 +2,23 @@ import { supabase } from './supabase';
 
 type ProcessManualResponse = {
   success: boolean;
-  manualId?: string;
-  fileUrl?: string;
-  fileName?: string;
   error?: string;
 };
 
 export const manualService = {
-  async uploadAndProcessManual(
+  /**
+   * Passo 1: envia o arquivo para o Supabase Storage e retorna
+   * o caminho + URL publica + nome do arquivo.
+   */
+  async uploadFile(
     file: File,
     equipmentId: string,
     onProgress: (msg: string) => void,
-  ) {
+  ): Promise<{ filePath: string; fileUrl: string; fileName: string }> {
     onProgress('Fazendo upload do arquivo...');
 
-    // 1. Upload direto para o Supabase Storage (evita limite de 4.5MB do Vercel)
     const filePath = `${equipmentId}/${Date.now()}-${file.name}`;
+
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('tecnoloc_assets')
       .upload(filePath, file, { contentType: 'application/pdf', upsert: false });
@@ -30,20 +31,32 @@ export const manualService = {
     const { data: publicUrlData } = supabase.storage
       .from('tecnoloc_assets')
       .getPublicUrl(uploadData.path);
-    const fileUrl = publicUrlData?.publicUrl ?? '';
 
-    onProgress('Enviando para processamento...');
+    onProgress('Upload concluido!');
+    return {
+      filePath: uploadData.path,
+      fileUrl: publicUrlData?.publicUrl ?? '',
+      fileName: file.name,
+    };
+  },
 
-    // 2. Chama a API apenas com o caminho do arquivo (sem base64)
+  /**
+   * Passo 2: envia apenas o caminho do arquivo e o manualId para
+   * a API serverless gerar embeddings e salvar em manual_sections.
+   * Chamado APOS o manual ser salvo no banco.
+   */
+  async processManualSections(
+    manualId: string,
+    filePath: string,
+    equipmentId: string,
+    onProgress: (msg: string) => void,
+  ): Promise<void> {
+    onProgress('Gerando embeddings do manual...');
+
     const response = await fetch('/api/process-manual', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filePath: uploadData.path,
-        fileUrl,
-        fileName: file.name,
-        equipmentId,
-      }),
+      body: JSON.stringify({ manualId, filePath, equipmentId }),
     });
 
     const rawResponse = await response.text();
@@ -51,19 +64,14 @@ export const manualService = {
     try {
       payload = rawResponse ? JSON.parse(rawResponse) : { success: false };
     } catch (err) {
-      console.error('Falha ao parsear resposta da API', { err, rawResponse: rawResponse.substring(0, 500) });
+      console.error('Falha ao parsear resposta da API', { err, raw: rawResponse.substring(0, 500) });
     }
 
     if (!response.ok || !payload.success) {
-      onProgress('Erro ao processar.');
+      onProgress('Erro ao processar embeddings.');
       throw new Error(payload?.error || 'Falha ao processar manual.');
     }
 
     onProgress('Manual processado com sucesso!');
-    return {
-      file_url: payload.fileUrl ?? fileUrl,
-      file_name: payload.fileName ?? file.name,
-      manual_id: payload.manualId ?? null,
-    };
   },
 };
