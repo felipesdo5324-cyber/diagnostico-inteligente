@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { dataService } from '../services/dataService';
+import { manualService } from '../services/manualService';
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Label, Select, Textarea, Badge } from '../components/UI';
 import { Manual } from '../types';
 
