@@ -17,6 +17,8 @@ export default function ManualsPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [rlsError, setRlsError] = useState<string | null>(null);
+  const [equipmentId, setEquipmentId] = useState('');
+  const [uploadLogs, setUploadLogs] = useState<string[]>([]);
   
   const [formData, setFormData] = useState<Omit<Manual, 'id'>>({
     equipment_name: '',
@@ -64,25 +66,42 @@ export default function ManualsPage() {
     }
   });
 
+  const handleProgressUpdate = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const entry = `${timestamp} · ${message}`;
+    setUploadLogs((prev) => [...prev.slice(-4), entry]);
+    console.log('[ManualsPage] upload progress:', message);
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const sanitizedEquipmentId = equipmentId.trim();
+    if (!sanitizedEquipmentId) {
+      toast.error('Informe o ID do equipamento antes de enviar o arquivo.');
+      e.target.value = '';
+      return;
+    }
+
     setIsUploading(true);
     setRlsError(null);
+    setUploadLogs([]);
     try {
-      const result = await dataService.uploadFile(file);
+      const result = await manualService.uploadAndProcessManual(
+        file,
+        sanitizedEquipmentId,
+        handleProgressUpdate
+      );
       setFormData(prev => ({
         ...prev,
-        file_url: result.file_url,
-        file_name: result.file_name
+        file_url: (result as any)?.fileUrl || (result as any)?.file_url || prev.file_url,
+        file_name: (result as any)?.fileName || (result as any)?.file_name || file.name
       }));
-      toast.success('Upload concluído!');
+      toast.success('Manual enviado para processamento!');
     } catch (error: any) {
-      if (error.message?.includes('row-level security') || error.message?.includes('RLS')) {
-        setRlsError('tecnoloc_assets');
-      }
-      toast.error('Erro no Supabase Storage: ' + error.message);
+      console.error('[ManualsPage] erro no upload', error);
+      toast.error(error?.message || 'Erro ao processar manual');
     } finally {
       setIsUploading(false);
     }
@@ -193,6 +212,14 @@ create policy "Acesso Público Delete" on storage.objects for delete using (buck
                     />
                   </div>
                   <div className="space-y-1">
+                    <Label>ID do Equipamento (Supabase) *</Label>
+                    <Input
+                      value={equipmentId}
+                      onChange={(e) => setEquipmentId(e.target.value)}
+                      placeholder="UUID ou identificador do equipamento"
+                    />
+                  </div>
+                  <div className="space-y-1">
                     <Label>Marca</Label>
                     <Input
                       value={formData.brand}
@@ -266,6 +293,16 @@ create policy "Acesso Público Delete" on storage.objects for delete using (buck
                     <div className="flex items-center gap-2 mt-3 px-4 py-2 bg-green-100/50 rounded-xl border border-green-100 text-green-700 w-fit">
                       <CheckCircle2 className="w-4 h-4" />
                       <span className="text-sm font-bold">Pronto para salvar: {formData.file_name}</span>
+                    </div>
+                  )}
+                  {uploadLogs.length > 0 && (
+                    <div className="mt-3 w-full rounded-2xl bg-slate-900 text-slate-100 p-4 text-xs font-mono space-y-1">
+                      {uploadLogs.map((log, index) => (
+                        <p key={`${log}-${index}`} className="flex items-center gap-2">
+                          <span className="inline-flex h-2 w-2 rounded-full bg-indigo-400" />
+                          {log}
+                        </p>
+                      ))}
                     </div>
                   )}
                 </div>
