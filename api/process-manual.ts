@@ -1,117 +1,142 @@
-import { createClient } from "@supabase/supabase-js";
-import OpenAI from "openai";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.js";
-import { NextApiRequest, NextApiResponse } from "next";
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
+import OpenAI from 'openai';
+import pdfParse from 'pdf-parse';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const openaiApiKey = process.env.OPENAI_API_KEY;
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+const supabase =
+  supabaseUrl && supabaseServiceKey
+    ? createClient(supabaseUrl, supabaseServiceKey)
+    : null;
 
-function createChunks(text: string, size: number, overlap: number) {
-  const chunks = [];
-  let i = 0;
-  while (i < text.length) {
-    chunks.push(text.slice(i, i + size));
-    i += size - overlap;
+const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
+
+const createChunks = (text: string, size = 1000, overlap = 150) => {
+  const chunks: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    chunks.push(text.slice(cursor, cursor + size));
+    cursor += Math.max(1, size - overlap);
   }
   return chunks;
-}
+};
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  console.log('Handler iniciado, method:', req.method);
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, error: 'Metodo nao permitido' });
+  }
+
+  if (!supabase || !openai) {
+    return res.status(500).json({ success: false, error: 'Variaveis de ambiente do backend nao configuradas.' });
+  }
+
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Método não permitido" });
+    const body = req.body as {
+      filePath?: string;
+      fileUrl?: string;
+      fileName?: string;
+      equipmentId?: string;
+    };
+
+    const { filePath, fileUrl, fileName, equipmentId } = body;
+
+    if (!filePath || !equipmentId) {
+      return res.status(400).json({ success: false, error: 'filePath e equipmentId sao obrigatorios' });
     }
 
-    const { fileBase64, fileName, equipmentId } = req.body;
+    console.log('Baixando arquivo do Storage:', filePath);
 
-    if (!fileBase64 || !equipmentId) {
-      return res.status(400).json({ error: "Dados inválidos" });
+    // Baixa o arquivo diretamente do Supabase Storage
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from('tecnoloc_assets')
+      .download(filePath);
+
+    if (downloadError || !fileData) {
+      console.error('Erro ao baixar arquivo', downloadError);
+      return res.status(500).json({ success: false, error: downloadError?.message ?? 'Erro ao baixar arquivo' });
     }
 
-    // Converter base64 para Buffer
-    const buffer = Buffer.from(fileBase64, "base64");
+    const fileBuffer = Buffer.from(await fileData.arrayBuffer());
+    console.log('Processando PDF, tamanho:', fileBuffer.length);
 
-    // Upload Storage
-    const filePath = `${equipmentId}/${Date.now()}-${fileName}`;
-    const { error: uploadError } = await supabase.storage
-      .from("tecnoloc_assets")
-      .upload(filePath, buffer, {
-        contentType: "application/pdf",
-      });
+    const pdfResult = await pdfParse(fileBuffer);
+    const fullText = pdfResult.text?.trim() ?? '';
 
-    if (uploadError) throw uploadError;
+    if (!fullText) {
+      return res.status(400).json({ success: false, error: 'Nao foi possivel extrair texto do PDF' });
+    }
 
-    // Salvar manual
+    const chunks = createChunks(fullText);
+    console.log('Total de chunks:', chunks.length);
+
+    if (!chunks.length) {
+      return res.status(400).json({ success: false, error: 'Nao foi possivel criar segmentos do conteudo' });
+    }
+
+    // Salva o manual no banco
     const { data: manualData, error: manualError } = await supabase
-      .from("manuals")
-      .insert({ equipment_id: equipmentId, file_path: filePath })
+      .from('manuals')
+      .insert({
+        equipment_id: equipmentId,
+        file_path: filePath,
+        file_url: fileUrl ?? null,
+        file_name: fileName ?? null,
+      })
       .select()
       .single();
 
-    if (manualError) throw manualError;
-
-    const manualId = manualData.id;
-    console.log("Manual inserido com sucesso:", manualData);
-
-    // Extrair texto
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-    let fullText = "";
-
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      fullText +=
-        textContent.items.map((item: any) => item.str).join(" ") + "\n";
+    if (manualError || !manualData) {
+      console.error('Erro ao inserir manual', manualError);
+      return res.status(500).json({ success: false, error: manualError?.message ?? 'Erro ao salvar manual' });
     }
 
-    console.log("Texto extraído tamanho:", fullText.length);
+    console.log('Gerando embeddings, chunks:', chunks.length);
 
-    const chunks = createChunks(fullText, 1000, 150);
+    // Processa em lotes de 100 para evitar timeout
+    const BATCH_SIZE = 100;
+    for (let batchStart = 0; batchStart < chunks.length; batchStart += BATCH_SIZE) {
+      const batchChunks = chunks.slice(batchStart, batchStart + BATCH_SIZE);
 
-    console.log("Quantidade de chunks:", chunks.length);
-
-    // Gerar embeddings e inserir
-    let chunksInseridos = 0;
-    for (const chunk of chunks) {
-      console.log(`Processando chunk ${chunksInseridos + 1}/${chunks.length}`);
       const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: chunk,
+        model: 'text-embedding-3-small',
+        input: batchChunks,
       });
 
-      const embedding = embeddingResponse.data[0].embedding;
-      console.log(`Embedding gerado para chunk ${chunksInseridos + 1}`);
+      for (let i = 0; i < batchChunks.length; i++) {
+        const embedding = embeddingResponse.data[i]?.embedding;
+        if (!embedding || embedding.length !== 1536) {
+          return res.status(500).json({ success: false, error: `Embedding invalido no chunk ${batchStart + i}` });
+        }
 
-      if (embedding.length !== 1536) {
-        throw new Error("Dimensão do embedding inválida");
+        const { error: sectionError } = await supabase
+          .from('manual_sections')
+          .insert({
+            manual_id: manualData.id,
+            equipment_id: equipmentId,
+            content: batchChunks[i],
+            embedding,
+          });
+
+        if (sectionError) {
+          console.error('Erro ao inserir chunk', sectionError);
+          return res.status(500).json({ success: false, error: sectionError.message });
+        }
       }
-
-      const { error } = await supabase.from("manual_sections").insert({
-        manual_id: manualId,
-        equipment_id: equipmentId,
-        content: chunk,
-        embedding: embedding,
-      });
-
-      if (error) {
-        console.error("Erro ao inserir chunk:", error);
-        throw error;
-      }
-      chunksInseridos++;
-      console.log(`Chunk ${chunksInseridos} inserido com sucesso`);
     }
 
-    console.log(`✓ Todos os ${chunksInseridos} chunks foram inseridos com sucesso`);
-
-    return res.status(200).json({ success: true });
+    return res.status(200).json({
+      success: true,
+      manualId: manualData.id,
+      fileUrl: fileUrl ?? null,
+      fileName: fileName ?? null,
+    });
   } catch (error: any) {
-    console.error("Erro no processamento:", error);
-    return res.status(500).json({ error: error.message });
+    console.error('Erro no processamento:', error);
+    return res.status(500).json({ success: false, error: error?.message ?? 'Erro interno' });
   }
 }

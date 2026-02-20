@@ -1,3 +1,5 @@
+import { supabase } from './supabase';
+
 type ProcessManualResponse = {
   success: boolean;
   manualId?: string;
@@ -12,57 +14,56 @@ export const manualService = {
     equipmentId: string,
     onProgress: (msg: string) => void,
   ) {
-    onProgress('Convertendo arquivo...');
+    onProgress('Fazendo upload do arquivo...');
 
-    const arrayBuffer = await file.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(arrayBuffer).reduce(
-        (data, byte) => data + String.fromCharCode(byte),
-        '',
-      ),
-    );
+    // 1. Upload direto para o Supabase Storage (evita limite de 4.5MB do Vercel)
+    const filePath = `${equipmentId}/${Date.now()}-${file.name}`;
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('tecnoloc_assets')
+      .upload(filePath, file, { contentType: 'application/pdf', upsert: false });
 
-    console.log('Payload enviado:', {
-      size: base64?.length,
-      fileName: file.name,
-      equipmentId,
-    });
+    if (uploadError) {
+      onProgress('Erro ao fazer upload do arquivo.');
+      throw new Error(uploadError.message);
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('tecnoloc_assets')
+      .getPublicUrl(uploadData.path);
+    const fileUrl = publicUrlData?.publicUrl ?? '';
 
     onProgress('Enviando para processamento...');
 
+    // 2. Chama a API apenas com o caminho do arquivo (sem base64)
     const response = await fetch('/api/process-manual', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        fileBase64: base64,
+        filePath: uploadData.path,
+        fileUrl,
         fileName: file.name,
         equipmentId,
       }),
     });
 
     const rawResponse = await response.text();
-    let payload: ProcessManualResponse | { error?: string } = { success: false };
+    let payload: ProcessManualResponse = { success: false };
     try {
       payload = rawResponse ? JSON.parse(rawResponse) : { success: false };
     } catch (err) {
-      console.error('Falha ao parsear resposta da API', { err, rawResponse });
+      console.error('Falha ao parsear resposta da API', { err, rawResponse: rawResponse.substring(0, 500) });
     }
 
-    if (!response.ok || !(payload as ProcessManualResponse).success) {
-      const message =
-        (payload as ProcessManualResponse)?.error ||
-        ((payload as ProcessManualResponse)?.success === false
-          ? 'Falha ao processar manual.'
-          : 'Resposta invalida do servidor.');
+    if (!response.ok || !payload.success) {
       onProgress('Erro ao processar.');
-      throw new Error(message);
+      throw new Error(payload?.error || 'Falha ao processar manual.');
     }
 
     onProgress('Manual processado com sucesso!');
     return {
-      file_url: (payload as ProcessManualResponse).fileUrl ?? '',
-      file_name: (payload as ProcessManualResponse).fileName ?? file.name,
-      manual_id: (payload as ProcessManualResponse).manualId ?? null,
+      file_url: payload.fileUrl ?? fileUrl,
+      file_name: payload.fileName ?? file.name,
+      manual_id: payload.manualId ?? null,
     };
   },
 };
