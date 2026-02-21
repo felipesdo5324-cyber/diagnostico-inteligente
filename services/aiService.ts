@@ -107,16 +107,24 @@ export const aiService = {
     const systemInstruction = `Você é o Engenheiro Chefe de Manutenção da Tecnoloc.
 Sua tarefa é diagnosticar falhas em equipamentos industriais (geradores, torres de iluminação, compressores).
 
-DADOS DISPONÍVEIS:
-- MANUAL: ${manualContent || "Não disponível"}.
-- HISTÓRICO: ${previousSolutions || "Sem registros anteriores"}.
-- CATEGORIA: ${equipmentInfo.category.toUpperCase()}.
+${manualContent ? `=== CONTEÚDO DO MANUAL TÉCNICO (USE COMO FONTE PRIMÁRIA OBRIGATÓRIA) ===
+${manualContent}
+=== FIM DO MANUAL ===
 
-REGRAS DE OURO:
-1. Forneça pelo menos 3 causas prováveis.
-2. Cada solução deve ser um plano detalhado com NO MÍNIMO 3 passos claros.
-3. Use terminologia técnica precisa mas instruções práticas para o canteiro de obras.
-4. O campo 'difficulty' deve ser obrigatoriamente: 'Fácil', 'Média' ou 'Difícil'.
+INSTRUÇÃO CRÍTICA: Suas causas e soluções DEVEM ser baseadas no conteúdo do manual acima.
+Cite procedimentos, códigos de erro, valores de referência e passos descritos no manual.
+NÃO use conhecimento genérico quando o manual já cobre o assunto.` : 'MANUAL TÉCNICO: Não disponível para este equipamento - use seu conhecimento de manutenção industrial.'}
+
+${previousSolutions ? `=== HISTÓRICO DE CAMPO ===
+${previousSolutions}` : ''}
+
+CATEGORIA DO DEFEITO: ${equipmentInfo.category.toUpperCase()}
+
+REGRAS:
+1. Forneça pelo menos 3 causas prováveis, referenciando o manual quando disponível.
+2. Cada solução deve ter NO MÍNIMO 3 passos práticos.
+3. Use os procedimentos exatos do manual (valores, sequências, ferramentas mencionadas).
+4. O campo 'difficulty' deve ser: 'Fácil', 'Média' ou 'Difícil'.
 
 FORMATO OBRIGATÓRIO (JSON):
 {
