@@ -144,6 +144,25 @@ export const dataService = {
     return data.map((r: any) => r.content).join('\n\n');
   },
 
+  /**
+   * Busca semântica: gera embedding da query e retorna os chunks mais relevantes.
+   * Requer a função match_manual_sections no Supabase (pgvector).
+   */
+  semanticSearchManual: async (query: string, manualId: string, topK = 10): Promise<string> => {
+    try {
+      const response = await fetch('/api/search-manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, manualId, topK }),
+      });
+      if (!response.ok) return '';
+      const data = await response.json();
+      return Array.isArray(data.chunks) ? data.chunks.join('\n\n') : '';
+    } catch {
+      return '';
+    }
+  },
+
   uploadFile: async (file: File): Promise<{ file_url: string; file_name: string }> => {
     const sb = getSupabase();
     if (!sb) throw new Error("Configuração do Supabase ausente.");

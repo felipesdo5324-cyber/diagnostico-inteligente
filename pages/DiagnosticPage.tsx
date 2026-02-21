@@ -54,7 +54,18 @@ export default function DiagnosticPage() {
 
     try {
       const manual = await dataService.findManualByName(formData.equipment_name, formData.model);
-      const manualContent = manual?.id ? await dataService.getManualSections(manual.id) : null;
+
+      // RAG: busca semântica pelos trechos mais relevantes para o defeito descrito
+      let manualContent: string | null = null;
+      if (manual?.id) {
+        const query = `${formData.defect_description} ${formData.defect_category} ${formData.equipment_name}`;
+        manualContent = await dataService.semanticSearchManual(query, manual.id, 10);
+        // Fallback: se busca semântica falhar (função pgvector não criada), usa chunks sequenciais
+        if (!manualContent) {
+          manualContent = await dataService.getManualSections(manual.id);
+        }
+      }
+
       const allLogs = await dataService.getLogs();
       const fieldTips = allLogs
         .filter(l => l.equipment_model === formData.model || l.defect_category === formData.defect_category)
