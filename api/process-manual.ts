@@ -14,6 +14,8 @@ const supabase =
 
 const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const createChunks = (text: string, size = 1000, overlap = 150) => {
   const chunks: string[] = [];
   let cursor = 0;
@@ -40,9 +42,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       equipmentId?: string;
     };
 
-    if (!manualId || !filePath || !equipmentId) {
-      return res.status(400).json({ success: false, error: 'manualId, filePath e equipmentId sao obrigatorios' });
+    if (!manualId || !filePath) {
+      return res.status(400).json({ success: false, error: 'manualId e filePath sao obrigatorios' });
     }
+
+    // equipmentId so e usado se for um UUID valido
+    const validEquipmentId = equipmentId && UUID_REGEX.test(equipmentId) ? equipmentId : null;
 
     console.log('Baixando arquivo do Storage:', filePath);
     const { data: fileData, error: downloadError } = await supabase.storage
@@ -81,14 +86,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(500).json({ success: false, error: `Embedding invalido no chunk ${batchStart + i}` });
         }
 
+        const row: Record<string, unknown> = {
+          manual_id: manualId,
+          content: batch[i],
+          embedding,
+        };
+        if (validEquipmentId) row.equipment_id = validEquipmentId;
+
         const { error: sectionError } = await supabase
           .from('manual_sections')
-          .insert({
-            manual_id: manualId,
-            equipment_id: equipmentId,
-            content: batch[i],
-            embedding,
-          });
+          .insert(row);
 
         if (sectionError) {
           console.error('Erro ao inserir chunk', sectionError);

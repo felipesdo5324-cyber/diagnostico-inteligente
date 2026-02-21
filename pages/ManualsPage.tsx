@@ -100,11 +100,6 @@ export default function ManualsPage() {
     if (!file) return;
 
     const sanitizedEquipmentId = equipmentId.trim();
-    if (!sanitizedEquipmentId) {
-      toast.error('Informe o ID do equipamento antes de enviar o arquivo.');
-      e.target.value = '';
-      return;
-    }
 
     setIsUploading(true);
     setRlsError(null);
@@ -238,11 +233,11 @@ create policy "Acesso Público Delete" on storage.objects for delete using (buck
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label>ID do Equipamento (Supabase) *</Label>
+                    <Label>ID do Equipamento <span className="text-slate-400 font-normal text-xs">(UUID opcional)</span></Label>
                     <Input
                       value={equipmentId}
                       onChange={(e) => setEquipmentId(e.target.value)}
-                      placeholder="UUID ou identificador do equipamento"
+                      placeholder="Cole o UUID do equipamento (opcional)"
                     />
                   </div>
                   <div className="space-y-1">

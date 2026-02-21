@@ -17,7 +17,8 @@ export const manualService = {
   ): Promise<{ filePath: string; fileUrl: string; fileName: string }> {
     onProgress('Fazendo upload do arquivo...');
 
-    const filePath = `${equipmentId}/${Date.now()}-${file.name}`;
+    const folder = equipmentId?.trim() || 'manuals';
+    const filePath = `${folder}/${Date.now()}-${file.name}`;
 
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('tecnoloc_assets')
