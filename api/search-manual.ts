@@ -29,27 +29,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // 1. Gera embedding da query (descrição do defeito)
+    // 1. Gera embedding da query
     const embeddingResponse = await openai.embeddings.create({
       model: 'text-embedding-3-small',
       input: query,
     });
     const queryEmbedding = embeddingResponse.data[0].embedding;
 
-    // 2. Busca os chunks mais similares via pgvector no Supabase
-    const { data, error } = await supabase.rpc('match_manual_sections', {
-      query_embedding: queryEmbedding,
-      match_manual_id: manualId,
-      match_count: topK,
-    });
+    // 2. Tenta busca híbrida (vetorial + full-text)
+    // Requer match_manual_sections_hybrid no Supabase (ver README para SQL)
+    const { data: hybridData, error: hybridError } = await supabase.rpc(
+      'match_manual_sections_hybrid',
+      {
+        query_embedding: queryEmbedding,
+        text_query: query,
+        match_manual_id: manualId,
+        match_count: topK,
+        semantic_weight: 0.7,
+        fulltext_weight: 0.3,
+      }
+    );
 
-    if (error) {
-      console.error('Erro na busca vetorial:', error);
-      return res.status(500).json({ error: error.message });
+    if (!hybridError && hybridData?.length) {
+      console.log('[search-manual] Busca híbrida OK, chunks:', hybridData.length);
+      const chunks: string[] = hybridData.map((row: any) => row.content);
+      return res.status(200).json({ chunks, mode: 'hybrid' });
     }
 
-    const chunks: string[] = (data || []).map((row: any) => row.content);
-    return res.status(200).json({ chunks });
+    // 3. Fallback: busca vetorial pura (match_manual_sections)
+    console.warn('[search-manual] Híbrida falhou, usando vetorial pura. Erro:', hybridError?.message);
+    const { data: vectorData, error: vectorError } = await supabase.rpc(
+      'match_manual_sections',
+      {
+        query_embedding: queryEmbedding,
+        match_manual_id: manualId,
+        match_count: topK,
+      }
+    );
+
+    if (vectorError) {
+      console.error('Erro na busca vetorial:', vectorError);
+      return res.status(500).json({ error: vectorError.message });
+    }
+
+    const chunks: string[] = (vectorData || []).map((row: any) => row.content);
+    return res.status(200).json({ chunks, mode: 'vector' });
   } catch (err: any) {
     console.error('Erro em search-manual:', err);
     return res.status(500).json({ error: err?.message ?? 'Erro interno' });
