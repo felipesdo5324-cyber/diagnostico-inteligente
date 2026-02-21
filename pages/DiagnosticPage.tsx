@@ -53,7 +53,8 @@ export default function DiagnosticPage() {
     setDiagnosisResult(null);
 
     try {
-      const manual = await dataService.findManualByModel(formData.model);
+      const manual = await dataService.findManualByName(formData.equipment_name, formData.model);
+      const manualContent = manual?.id ? await dataService.getManualSections(manual.id) : null;
       const allLogs = await dataService.getLogs();
       const fieldTips = allLogs
         .filter(l => l.equipment_model === formData.model || l.defect_category === formData.defect_category)
@@ -78,7 +79,7 @@ export default function DiagnosticPage() {
           defect: formData.defect_description, 
           category: formData.defect_category 
         },
-        manual?.description || null,
+        manualContent || manual?.description || null,
         fieldTips || null,
         base64Image
       );

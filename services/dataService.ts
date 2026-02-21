@@ -115,6 +115,35 @@ export const dataService = {
     return error ? undefined : data?.[0];
   },
 
+  findManualByName: async (equipmentName: string, model?: string): Promise<Manual | undefined> => {
+    const sb = getSupabase();
+    if (!sb) return undefined;
+    // Tenta por modelo primeiro
+    if (model?.trim()) {
+      const { data: byModel } = await sb.from('manuals').select('*').ilike('model', `%${model.trim()}%`).limit(1);
+      if (byModel?.[0]) return byModel[0];
+    }
+    // Fallback: busca por nome do equipamento
+    if (equipmentName?.trim()) {
+      const { data: byName } = await sb.from('manuals').select('*').ilike('equipment_name', `%${equipmentName.trim()}%`).limit(1);
+      if (byName?.[0]) return byName[0];
+    }
+    return undefined;
+  },
+
+  getManualSections: async (manualId: string): Promise<string> => {
+    const sb = getSupabase();
+    if (!sb || !manualId) return '';
+    const { data, error } = await sb
+      .from('manual_sections')
+      .select('content')
+      .eq('manual_id', manualId)
+      .order('id', { ascending: true })
+      .limit(30); // ~30 chunks = ~30.000 chars, suficiente para contexto sem estourar tokens
+    if (error || !data?.length) return '';
+    return data.map((r: any) => r.content).join('\n\n');
+  },
+
   uploadFile: async (file: File): Promise<{ file_url: string; file_name: string }> => {
     const sb = getSupabase();
     if (!sb) throw new Error("Configuração do Supabase ausente.");
