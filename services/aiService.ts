@@ -104,11 +104,17 @@ export const aiService = {
       throw new Error("Chave de API da OpenAI não configurada (OPENAI_API_KEY).");
     }
 
+    // Limite de tokens: ~30k TPM. Manual truncado a 20.000 chars (~5.000 tokens).
+    const MAX_MANUAL_CHARS = 20000;
+    const trimmedManual = manualContent && manualContent.length > MAX_MANUAL_CHARS
+      ? manualContent.slice(0, MAX_MANUAL_CHARS) + '\n...[conteúdo truncado para respeitar limite de tokens]'
+      : manualContent;
+
     const systemInstruction = `Você é um engenheiro sênior de manutenção industrial da Tecnoloc, especialista em geradores, torres de iluminação e compressores.
 
-${manualContent
+${trimmedManual
   ? `=== MANUAL TÉCNICO OFICIAL ===
-${manualContent}
+${trimmedManual}
 === FIM DO MANUAL ===
 
 REGRAS CRÍTICAS DE USO DO MANUAL:
@@ -177,7 +183,7 @@ Gere um diagnóstico técnico rigoroso e um plano de ação completo.`;
         ],
         response_format: { type: "json_object" },
         temperature: 0.1, // Mínimo para máxima fidelidade ao manual
-        max_tokens: 4096, // Respostas longas e detalhadas
+        max_tokens: 2048, // Mantém resposta detalhada dentro do limite de 30k TPM
       });
 
       const text = response.choices[0].message.content;
