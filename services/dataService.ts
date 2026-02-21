@@ -134,12 +134,12 @@ export const dataService = {
   getManualSections: async (manualId: string): Promise<string> => {
     const sb = getSupabase();
     if (!sb || !manualId) return '';
+    // Busca TODOS os chunks — sem limite, pois o GPT-4o suporta 128k tokens
     const { data, error } = await sb
       .from('manual_sections')
       .select('content')
       .eq('manual_id', manualId)
-      .order('id', { ascending: true })
-      .limit(30); // ~30 chunks = ~30.000 chars, suficiente para contexto sem estourar tokens
+      .order('id', { ascending: true });
     if (error || !data?.length) return '';
     return data.map((r: any) => r.content).join('\n\n');
   },

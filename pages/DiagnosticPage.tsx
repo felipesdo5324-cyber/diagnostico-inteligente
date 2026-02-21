@@ -59,7 +59,7 @@ export default function DiagnosticPage() {
       let manualContent: string | null = null;
       if (manual?.id) {
         const query = `${formData.defect_description} ${formData.defect_category} ${formData.equipment_name}`;
-        manualContent = await dataService.semanticSearchManual(query, manual.id, 10);
+        manualContent = await dataService.semanticSearchManual(query, manual.id, 20);
         // Fallback: se busca semântica falhar (função pgvector não criada), usa chunks sequenciais
         if (!manualContent) {
           manualContent = await dataService.getManualSections(manual.id);

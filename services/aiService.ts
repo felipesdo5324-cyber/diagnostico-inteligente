@@ -104,36 +104,44 @@ export const aiService = {
       throw new Error("Chave de API da OpenAI não configurada (OPENAI_API_KEY).");
     }
 
-    const systemInstruction = `Você é o Engenheiro Chefe de Manutenção da Tecnoloc.
-Sua tarefa é diagnosticar falhas em equipamentos industriais (geradores, torres de iluminação, compressores).
+    const systemInstruction = `Você é um engenheiro sênior de manutenção industrial da Tecnoloc, especialista em geradores, torres de iluminação e compressores.
 
-${manualContent ? `=== CONTEÚDO DO MANUAL TÉCNICO (USE COMO FONTE PRIMÁRIA OBRIGATÓRIA) ===
+${manualContent
+  ? `=== MANUAL TÉCNICO OFICIAL ===
 ${manualContent}
 === FIM DO MANUAL ===
 
-INSTRUÇÃO CRÍTICA: Suas causas e soluções DEVEM ser baseadas no conteúdo do manual acima.
-Cite procedimentos, códigos de erro, valores de referência e passos descritos no manual.
-NÃO use conhecimento genérico quando o manual já cobre o assunto.` : 'MANUAL TÉCNICO: Não disponível para este equipamento - use seu conhecimento de manutenção industrial.'}
+REGRAS CRÍTICAS DE USO DO MANUAL:
+- TODA causa identificada DEVE referenciar uma seção, código de erro, tabela ou procedimento do manual acima.
+- TODA solução DEVE reproduzir os passos EXATOS descritos no manual (números de peças, torques, valores, sequência de operações).
+- Se o manual citar um código de alarme, inclua o código e o significado na resposta.
+- Se o manual especificar um valor (pressão, temperatura, tensão, etc.), cite esse valor na resposta.
+- NÃO generalize. Se o manual diz "verificar pressão do óleo entre 3,5 e 4,2 bar", diga exatamente isso.
+- Se o manual tiver uma tabela de troubleshooting para esse defeito, siga ela passo a passo.`
+  : 'MANUAL TÉCNICO: Não disponível — use seu conhecimento de manutenção industrial para este equipamento.'}
 
-${previousSolutions ? `=== HISTÓRICO DE CAMPO ===
-${previousSolutions}` : ''}
+${previousSolutions
+  ? `=== EXPERIÊNCIAS ANTERIORES DE CAMPO ===
+${previousSolutions}
+=== FIM ===`
+  : ''}
 
 CATEGORIA DO DEFEITO: ${equipmentInfo.category.toUpperCase()}
 
-REGRAS:
-1. Forneça pelo menos 3 causas prováveis, referenciando o manual quando disponível.
-2. Cada solução deve ter NO MÍNIMO 3 passos práticos.
-3. Use os procedimentos exatos do manual (valores, sequências, ferramentas mencionadas).
-4. O campo 'difficulty' deve ser: 'Fácil', 'Média' ou 'Difícil'.
-
-FORMATO OBRIGATÓRIO (JSON):
+FORMATO DE RESPOSTA OBRIGATÓRIO (JSON válido):
 {
-  "possible_causes": ["Causa 1", "Causa 2", "Causa 3"],
+  "possible_causes": [
+    "[MANUAL p.XX] Descrição específica da causa conforme o manual",
+    "..."
+  ],
   "solutions": [
     {
-      "title": "Título da Solução",
-      "steps": ["Passo 1", "Passo 2", "Passo 3"],
-      "difficulty": "Fácil"
+      "title": "Nome exato do procedimento do manual",
+      "steps": [
+        "Passo 1 exatamente como descrito no manual, incluindo valores e ferramentas",
+        "..."
+      ],
+      "difficulty": "Fácil" | "Média" | "Difícil"
     }
   ]
 }`;
@@ -168,7 +176,8 @@ Gere um diagnóstico técnico rigoroso e um plano de ação completo.`;
           { role: "user", content: userContent }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.2, // Baixa temperatura para maior precisão técnica
+        temperature: 0.1, // Mínimo para máxima fidelidade ao manual
+        max_tokens: 4096, // Respostas longas e detalhadas
       });
 
       const text = response.choices[0].message.content;
