@@ -98,7 +98,8 @@ export default function DiagnosticPage() {
         },
         manualContent || manual?.description || null,
         fieldTips || null,
-        base64Image
+        base64Image,
+        manual?.id || null
       );
 
       // #region agent log

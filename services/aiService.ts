@@ -1,6 +1,7 @@
 
 import OpenAI from "openai";
 import { DiagnosticResult } from "../types";
+import { supabase } from "./supabase";
 
 // Função auxiliar para buscar credenciais de forma robusta
 const getCredential = (key: string): string | undefined => {
@@ -99,24 +100,55 @@ export const aiService = {
     equipmentInfo: { name: string; brand: string; model: string; defect: string; category: string },
     manualContent: string | null,
     previousSolutions: string | null,
-    imageBase64: string | null
+    imageBase64: string | null,
+    manualId?: string | null
   ): Promise<DiagnosticResult> => {
     
     if (!apiKey) {
       throw new Error("Chave de API da OpenAI não configurada (OPENAI_API_KEY).");
     }
 
-    // Limite de tokens: ~30k TPM. Manual truncado a 20.000 chars (~5.000 tokens).
-    const MAX_MANUAL_CHARS = 20000;
-    const trimmedManual = manualContent && manualContent.length > MAX_MANUAL_CHARS
-      ? manualContent.slice(0, MAX_MANUAL_CHARS) + '\n...[conteúdo truncado para respeitar limite de tokens]'
-      : manualContent;
+    // ── RAG: gerar embedding do defeito e buscar trechos relevantes no Supabase ─────
+    let manualContext = "";
+
+    try {
+      const embeddingResponse = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: equipmentInfo.defect
+      });
+      const queryEmbedding = embeddingResponse.data[0].embedding;
+
+      if (manualId) {
+        const { data: ragResults, error: ragError } = await supabase.rpc(
+          "match_manual_sections_hybrid",
+          {
+            query_embedding: queryEmbedding,
+            text_query: equipmentInfo.defect,
+            match_manual_id: manualId,
+            match_count: 5
+          }
+        );
+
+        if (ragError) {
+          console.error("Erro na busca RAG:", ragError);
+        } else if (ragResults && ragResults.length > 0) {
+          manualContext = ragResults
+            .map((r: any) => r.content)
+            .join("\n\n");
+        }
+      }
+    } catch (ragErr: any) {
+      console.error("Falha no pipeline RAG (embedding/RPC):", ragErr.message);
+    }
+
+    // Fallback: se RAG não retornou nada, usa o manualContent recebido como parâmetro
+    const finalManualContext = manualContext || manualContent || "";
 
     const systemInstruction = `Você é um Especialista Sênior em Manutenção e Diagnóstico de Máquinas da Tecnoloc, especializado em geradores, torres de iluminação e compressores. Sua função é analisar problemas técnicos relatados por operadores de campo e fornecer diagnósticos precisos e planos de ação seguros.
 
-${trimmedManual
-  ? `=== MANUAL TÉCNICO OFICIAL ===
-${trimmedManual}
+${finalManualContext
+  ? `=== TRECHOS RELEVANTES DO MANUAL ===
+${finalManualContext}
 === FIM DO MANUAL ===
 
 DIRETRIZES DE USO DO MANUAL:
