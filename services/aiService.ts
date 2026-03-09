@@ -39,12 +39,7 @@ function forceString(val: any): string {
 }
 
 /**
- * Normaliza a resposta da IA (novo formato estruturado) para o contrato DiagnosticResult.
- *
- * Mapeamento do novo formato JSON:
- *   possible_causes ← sintomas_identificados + causa_provavel
- *   solutions[0]    ← avisos_seguranca (prefixados) + passos_resolucao
- *                     título = referencia_manual ou 'Plano de Resolução Técnica'
+ * Normaliza a resposta da IA para o contrato DiagnosticResult.
  */
 function sanitizeResult(data: any): DiagnosticResult {
   const result: DiagnosticResult = {
@@ -54,44 +49,47 @@ function sanitizeResult(data: any): DiagnosticResult {
 
   if (!data || typeof data !== 'object') return result;
 
-  // ── Diagnóstico não encontrado no manual ─────────────────────────────────
-  if (data.status_diagnostico === 'nao_encontrado') {
-    result.possible_causes = ['Manual técnico não cobre este sintoma. Consulte o suporte Tecnoloc.'];
+  // Normalização de Causas
+  const rawCauses = Array.isArray(data.possible_causes) ? data.possible_causes :
+                   Array.isArray(data.causas) ? data.causas : [];
+  result.possible_causes = rawCauses.map(forceString).filter((s: string) => s.trim() !== '');
+
+  // Normalização de Soluções
+  const rawSolutions = Array.isArray(data.solutions) ? data.solutions :
+                      Array.isArray(data.solucoes) ? data.solucoes : [];
+
+  result.solutions = rawSolutions.map((s: any) => {
+    if (typeof s === 'string') {
+      return { title: 'Ação Corretiva', steps: [s], difficulty: 'Média' as const };
+    }
+
+    const title = forceString(s.title || s.titulo || s.nome || 'Solução Técnica');
+    const steps = Array.isArray(s.steps) ? s.steps :
+                 Array.isArray(s.passos) ? s.passos : [forceString(s.steps || s.passos)];
+
+    let difficulty: 'Fácil' | 'Média' | 'Difícil' = 'Média';
+    const d = forceString(s.difficulty || s.dificuldade).toLowerCase();
+    if (d.includes('fácil') || d.includes('facil') || d.includes('easy')) difficulty = 'Fácil';
+    if (d.includes('difícil') || d.includes('dificil') || d.includes('hard')) difficulty = 'Difícil';
+
+    return {
+      title,
+      steps: steps.map(forceString).filter((st: string) => st.trim() !== ''),
+      difficulty
+    };
+  });
+
+  // Garantia mínima de conteúdo
+  if (result.possible_causes.length === 0) {
+    result.possible_causes = ['Causa não identificada — realizar inspeção técnica completa.'];
+  }
+  if (result.solutions.length === 0) {
     result.solutions = [{
       title: 'Verificação Padrão Tecnoloc',
-      steps: ['Realizar inspeção visual', 'Checar conexões elétricas', 'Validar níveis de fluidos'],
+      steps: ['Realizar inspeção visual completa do equipamento', 'Checar conexões elétricas e hidráulicas', 'Validar níveis de fluidos e pressões operacionais'],
       difficulty: 'Fácil'
     }];
-    return result;
   }
-
-  // ── Causas: sintomas identificados + causa provável ──────────────────────
-  const sintomas: string[] = Array.isArray(data.sintomas_identificados)
-    ? data.sintomas_identificados.map(forceString).filter((s: string) => s.trim() !== '')
-    : [];
-  const causaProvavel = forceString(data.causa_provavel || '').trim();
-  if (causaProvavel) sintomas.push(causaProvavel);
-  result.possible_causes = sintomas.length > 0 ? sintomas : ['Causa não identificada no manual.'];
-
-  // ── Passos: avisos de segurança (prefixados) + passos de resolução ────────
-  const avisos: string[] = Array.isArray(data.avisos_seguranca)
-    ? data.avisos_seguranca.map((a: any) => `⚠️ SEGURANÇA: ${forceString(a)}`).filter((s: string) => s.trim() !== '')
-    : [];
-  const passos: string[] = Array.isArray(data.passos_resolucao)
-    ? data.passos_resolucao.map(forceString).filter((s: string) => s.trim() !== '')
-    : [];
-  const allSteps = [...avisos, ...passos];
-
-  const refManual = forceString(data.referencia_manual || '').trim();
-  const solutionTitle = refManual
-    ? `Resolução Técnica — ${refManual}`
-    : 'Plano de Resolução Técnica';
-
-  result.solutions = [{
-    title: solutionTitle,
-    steps: allSteps.length > 0 ? allSteps : ['Consultar técnico especializado.'],
-    difficulty: 'Média'
-  }];
 
   return result;
 }
@@ -114,53 +112,48 @@ export const aiService = {
       ? manualContent.slice(0, MAX_MANUAL_CHARS) + '\n...[conteúdo truncado para respeitar limite de tokens]'
       : manualContent;
 
-    const systemInstruction = `<role>
-Você é um Especialista Sênior em Manutenção e Diagnóstico de Máquinas. Sua função é analisar problemas técnicos relatados por operadores e fornecer soluções precisas e seguras.
-</role>
+    const systemInstruction = `Você é um Especialista Sênior em Manutenção e Diagnóstico de Máquinas da Tecnoloc, especializado em geradores, torres de iluminação e compressores. Sua função é analisar problemas técnicos relatados por operadores de campo e fornecer diagnósticos precisos e planos de ação seguros.
 
-<objective>
-Diagnosticar a causa raiz do problema relatado pelo usuário e fornecer um passo a passo para a resolução, baseando-se EXCLUSIVAMENTE nos manuais técnicos fornecidos no contexto.
-</objective>
-
-<constraints>
-1. GROUNDING ESTRITO: Baseie sua resposta APENAS no texto contido na tag <manual_tecnico>. Não utilize seu conhecimento prévio para inventar passos de manutenção.
-2. ANTI-ALUCINAÇÃO: Se as informações no <manual_tecnico> não forem suficientes para resolver o <problema_usuario>, você deve definir o status como "nao_encontrado" e afirmar que o manual não cobre este sintoma.
-3. SEGURANÇA: Sempre priorize e liste os avisos de segurança (EPIs, desligar energia, etc.) mencionados no manual antes dos passos de resolução.
-</constraints>
-
-<instructions>
-Antes de gerar a saída final, processe a informação usando o seguinte raciocínio:
-1. Analise o <problema_usuario> e extraia sintomas chave ou códigos de erro.
-2. Vasculhe o <manual_tecnico> em busca de correspondências exatas ou semânticas para esses sintomas.
-3. Identifique a causa provável listada no manual.
-4. Extraia os passos de resolução e os avisos de segurança associados a essa causa.
-</instructions>
-
-<output_format>
-Retorne a resposta ESTRITAMENTE no formato JSON abaixo. Não inclua textos antes ou depois do JSON. Não inclua formatação markdown.
-
-{
-  "status_diagnostico": "sucesso" | "nao_encontrado",
-  "sintomas_identificados": ["sintoma 1", "sintoma 2"],
-  "causa_provavel": "Descrição da causa segundo o manual",
-  "avisos_seguranca": ["aviso 1", "aviso 2"],
-  "passos_resolucao": ["1. Passo um...", "2. Passo dois..."],
-  "referencia_manual": "Página ou seção de onde a informação foi extraída"
-}
-</output_format>
-
-<manual_tecnico>
 ${trimmedManual
-  ? trimmedManual
-  : 'Manual técnico não disponível para este equipamento.'}
-${previousSolutions ? `\n=== EXPERIÊNCIAS ANTERIORES DE CAMPO ===\n${previousSolutions}\n===` : ''}
-</manual_tecnico>`;
+  ? `=== MANUAL TÉCNICO OFICIAL ===
+${trimmedManual}
+=== FIM DO MANUAL ===
 
-    const userPrompt = `<problema_usuario>
-Equipamento: ${equipmentInfo.name} (${equipmentInfo.brand} ${equipmentInfo.model})
-Categoria do defeito: ${equipmentInfo.category.toUpperCase()}
-Defeito relatado: "${equipmentInfo.defect}"
-</problema_usuario>`;
+DIRETRIZES DE USO DO MANUAL:
+- Priorize sempre as informações do manual técnico acima.
+- Referencie seções, códigos de erro ou tabelas do manual quando disponíveis.
+- Cite valores técnicos exatos (pressões, tensões, torques) mencionados no manual.`
+  : 'MANUAL TÉCNICO: Não disponível — utilize seu conhecimento de manutenção industrial para este equipamento.'}
+
+${previousSolutions
+  ? `=== EXPERIÊNCIAS ANTERIORES DE CAMPO ===
+${previousSolutions}
+===`
+  : ''}
+
+REGRAS DE OURO — SIGA OBRIGATORIAMENTE:
+1. Forneça pelo menos 3 causas prováveis.
+2. Cada solução deve ser um plano detalhado com NO MÍNIMO 3 passos claros.
+3. Use terminologia técnica precisa mas instruções práticas para o canteiro de obras.
+4. O campo 'difficulty' deve ser obrigatoriamente: 'Fácil', 'Média' ou 'Difícil'.
+
+FORMATO OBRIGATÓRIO (JSON válido, sem texto fora do JSON):
+{
+  "possible_causes": ["Causa 1", "Causa 2", "Causa 3"],
+  "solutions": [
+    {
+      "title": "Título da Solução",
+      "steps": ["Passo 1", "Passo 2", "Passo 3"],
+      "difficulty": "Fácil"
+    }
+  ]
+}`;
+
+    const userPrompt = `EQUIPAMENTO: ${equipmentInfo.name} (${equipmentInfo.brand} ${equipmentInfo.model})
+CATEGORIA DO DEFEITO: ${equipmentInfo.category.toUpperCase()}
+DEFEITO RELATADO: "${equipmentInfo.defect}"
+
+Gere um diagnóstico técnico rigoroso com no mínimo 3 causas prováveis e um plano de ação detalhado.`;
 
     // Montagem do conteúdo da mensagem do usuário (Texto + Imagem Opcional)
     let userContent: any;
