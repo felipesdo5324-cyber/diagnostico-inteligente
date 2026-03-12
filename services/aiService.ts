@@ -108,13 +108,24 @@ export const aiService = {
       throw new Error("Chave de API da OpenAI não configurada (OPENAI_API_KEY).");
     }
 
-    // ── RAG: gerar embedding do defeito e buscar trechos relevantes no Supabase ─────
+    // ── RAG: gerar embedding com query enriquecida e buscar trechos no Supabase ──────
+    // Query enriquecida = equipamento + marca + modelo + categoria + defeito
+    // Equivale ao que NotebookLM faz: pesquisa contextual ampla antes de responder
     let manualContext = "";
+    let ragSourcesLog: string[] = [];
 
     try {
+      const enrichedQuery = [
+        equipmentInfo.defect,
+        equipmentInfo.name,
+        equipmentInfo.brand,
+        equipmentInfo.model,
+        equipmentInfo.category
+      ].filter(Boolean).join(" — ");
+
       const embeddingResponse = await openai.embeddings.create({
         model: "text-embedding-3-small",
-        input: equipmentInfo.defect
+        input: enrichedQuery
       });
       const queryEmbedding = embeddingResponse.data[0].embedding;
 
@@ -123,18 +134,25 @@ export const aiService = {
           "match_manual_sections_hybrid",
           {
             query_embedding: queryEmbedding,
-            text_query: equipmentInfo.defect,
+            text_query: enrichedQuery,
             match_manual_id: manualId,
-            match_count: 5
+            match_count: 10  // Aumentado: mais contexto = menos alucinação
           }
         );
 
         if (ragError) {
           console.error("Erro na busca RAG:", ragError);
         } else if (ragResults && ragResults.length > 0) {
+          // Inclui metadados de seção/página para o modelo citar com precisão (estilo NotebookLM)
           manualContext = ragResults
-            .map((r: any) => r.content)
-            .join("\n\n");
+            .map((r: any, i: number) => {
+              const header = r.section_title
+                ? `[TRECHO ${i + 1} — ${r.section_title}${r.page_number ? `, p.${r.page_number}` : ''}]`
+                : `[TRECHO ${i + 1}]`;
+              ragSourcesLog.push(header);
+              return `${header}\n${r.content}`;
+            })
+            .join("\n\n---\n\n");
         }
       }
     } catch (ragErr: any) {
@@ -143,39 +161,48 @@ export const aiService = {
 
     // Fallback: se RAG não retornou nada, usa o manualContent recebido como parâmetro
     const finalManualContext = manualContext || manualContent || "";
+    const usingRAG = manualContext.length > 0;
 
-    const systemInstruction = `Você é um Especialista Sênior em Manutenção e Diagnóstico de Máquinas da Tecnoloc, especializado em geradores, torres de iluminação e compressores. Sua função é analisar problemas técnicos relatados por operadores de campo e fornecer diagnósticos precisos e planos de ação seguros.
+    const systemInstruction = `Você é um sistema de diagnóstico técnico industrial da Tecnoloc, especializado em geradores, torres de iluminação e compressores. Seu comportamento é idêntico ao NotebookLM: você SOMENTE responde com base nos documentos fornecidos, nunca inventa informações.
 
 ${finalManualContext
-  ? `=== TRECHOS RELEVANTES DO MANUAL ===
-${finalManualContext}
-=== FIM DO MANUAL ===
+  ? `╔══════════════════════════════════════════════════════════╗
+   DOCUMENTOS DO MANUAL TÉCNICO (BASE EXCLUSIVA DE RESPOSTA)
+╚══════════════════════════════════════════════════════════╝
 
-DIRETRIZES DE USO DO MANUAL:
-- Priorize sempre as informações do manual técnico acima.
-- Referencie seções, códigos de erro ou tabelas do manual quando disponíveis.
-- Cite valores técnicos exatos (pressões, tensões, torques) mencionados no manual.`
-  : 'MANUAL TÉCNICO: Não disponível — utilize seu conhecimento de manutenção industrial para este equipamento.'}
+${finalManualContext}
+
+╔══════════════════════════════════════════════════════════╗
+   REGRAS DE GROUNDING OBRIGATÓRIAS (como o NotebookLM)
+╚══════════════════════════════════════════════════════════╝
+1. USE APENAS os trechos do manual acima. PROIBIDO usar conhecimento externo ao documento.
+2. Para cada causa e cada passo de solução, você DEVE citar o trecho de onde a informação foi extraída (ex: "[TRECHO 3 — Seção 4.2]").
+3. Se o manual mencionar valores exatos (pressão, tensão, torque, temperatura), transcreva-os literalmente — nunca aproxime.
+4. Se o manual mencionar um código de erro ou alarme associado ao defeito, inclua o código e seu significado exato.
+5. Se os trechos fornecidos NÃO contiverem informação suficiente para diagnosticar o defeito, indique isso explicitamente em vez de inventar.
+6. NÃO generalize, NÃO parafraseie além do necessário, NÃO adicione passos que não estejam no manual.`
+  : `MANUAL TÉCNICO: Não disponível para este equipamento.
+Utilize seu conhecimento de manutenção industrial, mas sinalize claramente que as informações NÃO vêm de um manual específico.`}
 
 ${previousSolutions
-  ? `=== EXPERIÊNCIAS ANTERIORES DE CAMPO ===
+  ? `=== EXPERIÊNCIAS ANTERIORES DE CAMPO (contexto adicional) ===
 ${previousSolutions}
 ===`
   : ''}
 
-REGRAS DE OURO — SIGA OBRIGATORIAMENTE:
-1. Forneça pelo menos 3 causas prováveis.
-2. Cada solução deve ser um plano detalhado com NO MÍNIMO 3 passos claros.
-3. Use terminologia técnica precisa mas instruções práticas para o canteiro de obras.
+REGRAS DE SAÍDA — SIGA OBRIGATORIAMENTE:
+1. Forneça pelo menos 3 causas prováveis, cada uma com referência ao trecho do manual (quando disponível).
+2. Cada solução deve ter NO MÍNIMO 3 passos claros extraídos do manual.
+3. Use a terminologia exata do manual (nomes de peças, procedimentos, valores).
 4. O campo 'difficulty' deve ser obrigatoriamente: 'Fácil', 'Média' ou 'Difícil'.
 
 FORMATO OBRIGATÓRIO (JSON válido, sem texto fora do JSON):
 {
-  "possible_causes": ["Causa 1", "Causa 2", "Causa 3"],
+  "possible_causes": ["Causa 1 [TRECHO X]", "Causa 2 [TRECHO Y]", "Causa 3 [TRECHO Z]"],
   "solutions": [
     {
-      "title": "Título da Solução",
-      "steps": ["Passo 1", "Passo 2", "Passo 3"],
+      "title": "Título exato do procedimento do manual",
+      "steps": ["Passo 1 conforme manual", "Passo 2 conforme manual", "Passo 3 conforme manual"],
       "difficulty": "Fácil"
     }
   ]
@@ -235,10 +262,12 @@ Gere um diagnóstico técnico rigoroso com no mínimo 3 causas prováveis e um p
           message:'Sanitized diagnostic result summary',
           data:{
             possibleCausesCount:sanitized.possible_causes.length,
-            solutionsCount:sanitized.solutions.length
+            solutionsCount:sanitized.solutions.length,
+            ragUsed: usingRAG,
+            ragSources: ragSourcesLog
           },
-          runId:'pre-fix',
-          hypothesisId:'H1'
+          runId:'rag-grounding',
+          hypothesisId:'H2'
         })
       }).catch(()=>{});
       // #endregion
