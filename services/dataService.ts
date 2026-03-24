@@ -163,7 +163,7 @@ export const dataService = {
     }
   },
 
-  uploadFile: async (file: File): Promise<{ file_url: string; file_name: string }> => {
+  uploadFile: async (file: File): Promise<{ file_url: string; file_name: string; file_path: string }> => {
     const sb = getSupabase();
     if (!sb) throw new Error("Configuração do Supabase ausente.");
     const fileExt = file.name.split('.').pop();
@@ -172,6 +172,34 @@ export const dataService = {
     const { error: uploadError } = await sb.storage.from('tecnoloc_assets').upload(filePath, file);
     if (uploadError) throw uploadError;
     const { data } = sb.storage.from('tecnoloc_assets').getPublicUrl(filePath);
-    return { file_url: data.publicUrl, file_name: file.name };
+    return { file_url: data.publicUrl, file_name: file.name, file_path: filePath };
+  },
+
+  saveFailureManual: async (data: {
+    titulo: string;
+    categoria: 'eletrica' | 'mecanica';
+    equipamento: string;
+    modelo: string;
+    falha: string;
+    resolucao: string;
+  }): Promise<void> => {
+    const sb = getSupabase();
+    if (!sb) throw new Error("Configuração do Supabase ausente.");
+    const { error } = await sb.from('failure_manuals').insert([data]);
+    if (error) throw error;
+  },
+
+  getFailureManuals: async (): Promise<any[]> => {
+    const sb = getSupabase();
+    if (!sb) return [];
+    const { data, error } = await sb.from('failure_manuals').select('*').order('created_at', { ascending: false });
+    return error ? [] : (data || []);
+  },
+
+  deleteFailureManual: async (id: string): Promise<void> => {
+    const sb = getSupabase();
+    if (!sb) throw new Error("Configuração do Supabase ausente.");
+    const { error } = await sb.from('failure_manuals').delete().eq('id', id);
+    if (error) throw error;
   }
 };

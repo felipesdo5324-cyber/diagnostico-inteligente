@@ -14,6 +14,7 @@ const DiagnosticPage = lazy(() => import('./pages/DiagnosticPage'));
 const ManualsPage = lazy(() => import('./pages/ManualsPage'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage'));
 const ChecklistPage = lazy(() => import('./pages/ChecklistPage'));
+const ManualCadastroPage = lazy(() => import('./pages/ManualCadastroPage'));
 
 const queryClient = new QueryClient();
 
@@ -47,6 +48,10 @@ const App: React.FC = () => {
             
             <Route path="/checklist" element={
               <ProtectedRoute children={<ChecklistPage />} />
+            } />
+
+            <Route path="/cadastro-manuais" element={
+              <ProtectedRoute adminOnly={true} children={<ManualCadastroPage />} />
             } />
 
             <Route path="*" element={<Navigate to="/" replace />} />
