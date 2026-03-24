@@ -47,12 +47,19 @@ const NavCard: React.FC<{
   );
 };
 
+import { useLocation } from 'react-router-dom';
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
-  const ADMIN_EMAIL = 'felipe.sdo17@gmail.com';
+  const [loadingUser, setLoadingUser] = useState(true);
+  const ADMIN_EMAILS = ['felipe.sdo17@gmail.com'];
+  const location = useLocation();
 
   useEffect(() => {
-    dataService.getCurrentUser().then(setUser);
+    dataService.getCurrentUser().then((u) => {
+      setUser(u);
+      setLoadingUser(false);
+    });
   }, []);
 
   const handleLogout = () => {
@@ -61,7 +68,8 @@ export default function Home() {
     }
   };
 
-  const isAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const isAdmin = Boolean(user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase()));
+  const hasUser = user !== null;
 
   return (
     <div className="min-h-screen relative overflow-hidden font-sans" style={{
@@ -126,7 +134,23 @@ export default function Home() {
           <NavCard to="/manuais" title="Manuais Técnicos" description="Biblioteca digital completa com documentação técnica de todos os modelos de frota." icon={<FileText className="w-8 h-8 text-white" />} color="orange" />
           <NavCard to="/checklist" title="Checklist" description="Inspeção rigorosa de entrada e saída para garantir a qualidade dos equipamentos alugados." icon={<ClipboardCheck className="w-8 h-8 text-white" />} color="orange" />
           <NavCard to="/historico" title="Histórico" description="Acesse o registro completo de diagnósticos anteriores e soluções aplicadas pelos técnicos." icon={<History className="w-8 h-8 text-white" />} color="green" />
+          {isAdmin ? (
+            <NavCard to="/cadastro-manuais" title="Manual de Falhas" description="Cadastre e consulte manuais exclusivos para falhas e resoluções usados pela IA." icon={<FileText className="w-8 h-8 text-white" />} color="blue" />
+          ) : (
+            <div className="col-span-full bg-white/10 border border-white/20 rounded-2xl p-4 text-center text-white/80">
+              {loadingUser
+                ? 'Carregando perfil de usuário...'
+                : (user
+                    ? 'Apenas administradores podem acessar esta área. Use o e-mail administrativo.'
+                    : 'Usuário não autenticado. Faça login para acessar o sistema.')}
+            </div>
+          )}
         </div>
+        {location.state?.accessDenied && (
+          <div className="mt-4 text-center text-yellow-300 bg-yellow-900/20 p-3 rounded-lg border border-yellow-600">
+            Acesso negado: você precisa ser administrador para ver esta página.
+          </div>
+        )}
       </div>
     </div>
   );

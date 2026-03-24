@@ -92,6 +92,42 @@ function sanitizeResult(data: any): DiagnosticResult {
   return result;
 }
 
+/**
+ * Extrai texto de um PDF usando pdfjs-dist
+ */
+async function extractTextFromPDF(pdfBase64: string): Promise<string> {
+  try {
+    // Importar dinamicamente para evitar problemas de build
+    const pdfjsLib = await import('pdfjs-dist');
+    
+    // Configurar worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+    // Converter base64 para Uint8Array
+    const pdfData = Uint8Array.from(atob(pdfBase64), c => c.charCodeAt(0));
+    
+    // Carregar PDF
+    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+    
+    let fullText = '';
+    
+    // Extrair texto de todas as páginas
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ');
+      fullText += pageText + '\n\n';
+    }
+    
+    return fullText.trim();
+  } catch (error) {
+    console.error('Erro ao extrair texto do PDF:', error);
+    throw new Error('Não foi possível extrair texto do PDF. Verifique se o arquivo está válido.');
+  }
+}
+
 export const aiService = {
   analyzeEquipment: async (
     equipmentInfo: { name: string; brand: string; model: string; defect: string; category: string },
@@ -194,6 +230,108 @@ Gere um diagnóstico técnico rigoroso e um plano de ação completo.`;
     } catch (error: any) {
       console.error("Erro Crítico OpenAI Service:", error);
       throw new Error(`Falha no Diagnóstico GPT-4o: ${error.message}`);
+    }
+  },
+
+  /**
+   * Extrai falhas e resoluções de um documento PDF usando IA visão
+   */
+  extractFailuresFromPDF: async (
+    pdfBase64: string,
+    equipamento: string,
+    modelo: string,
+    categoria: 'eletrica' | 'mecanica'
+  ): Promise<Array<{ titulo: string; falha: string; resolucao: string }>> => {
+    if (!apiKey) {
+      throw new Error("Chave de API da OpenAI não configurada (OPENAI_API_KEY).");
+    }
+
+    try {
+      // Primeiro, extrair texto do PDF
+      const pdfText = await extractTextFromPDF(pdfBase64);
+      
+      if (!pdfText || pdfText.trim().length === 0) {
+        throw new Error("O PDF não contém texto legível ou está vazio.");
+      }
+
+      const systemPrompt = `Você é um especialista em análise de documentos técnicos de manutenção. 
+Sua tarefa é extrair de um documento de texto uma lista estruturada de falhas e suas resoluções.
+
+EQUIPAMENTO: ${equipamento}
+MODELO: ${modelo}
+CATEGORIA: ${categoria === 'eletrica' ? 'Elétrica' : 'Mecânica'}
+
+CONTEÚDO DO DOCUMENTO:
+${pdfText}
+
+Para cada falha encontrada no documento, extraia:
+1. Um título curto e descritivo da falha
+2. A descrição completa do sintoma/falha
+3. Os passos detalhados de resolução
+
+FORMATO DE SAÍDA (JSON válido):
+{
+  "failures": [
+    {
+      "titulo": "Título descritivo (5-10 palavras)",
+      "falha": "Descrição completa do sintoma/falha conforme documento",
+      "resolucao": "Passos numerados ou detalhados de resolução conforme documento"
+    }
+  ]
+}
+
+IMPORTANTE:
+- Mantenha a linguagem e terminologia do documento original
+- Se houver múltiplas falhas, crie uma entrada para cada uma
+- Se não encontrar falhas estruturadas, tente extrair informações de problemas/soluções mencionados
+- Sempre retorne um JSON válido`;
+
+      const userPrompt = `Analise o conteúdo do documento acima e extraia todas as falhas/problemas e suas resoluções. 
+O documento é um manual de manutenção para um ${equipamento} modelo ${modelo} da categoria ${categoria}.`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { 
+            role: "system", 
+            content: systemPrompt 
+          },
+          { 
+            role: "user", 
+            content: userPrompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.5,
+        max_tokens: 4096
+      });
+
+      const text = response.choices[0].message.content;
+      if (!text) throw new Error("A IA retornou uma resposta vazia ao processar o PDF.");
+
+      const parsed = JSON.parse(text);
+      const failures = Array.isArray(parsed.failures) ? parsed.failures : [];
+
+      if (failures.length === 0) {
+        throw new Error("Nenhuma falha foi encontrada no PDF. Verifique se o documento contém informações de falhas e resoluções.");
+      }
+
+      // Validar estrutura de cada falha
+      const validFailures = failures.filter((f: any) => 
+        f.titulo && typeof f.titulo === 'string' &&
+        f.falha && typeof f.falha === 'string' &&
+        f.resolucao && typeof f.resolucao === 'string'
+      );
+
+      if (validFailures.length === 0) {
+        throw new Error("O formato das falhas extraídas é inválido. Tente com outro documento.");
+      }
+
+      return validFailures;
+
+    } catch (error: any) {
+      console.error("Erro ao extrair falhas do PDF:", error);
+      throw new Error(`Erro ao processar PDF: ${error.message}`);
     }
   }
 };
