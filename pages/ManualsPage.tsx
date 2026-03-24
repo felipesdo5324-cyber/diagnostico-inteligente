@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { dataService } from '../services/dataService';
+import { manualService } from '../services/manualService';
 import { Card, CardContent, CardHeader, CardTitle, Button, Input, Label, Select, Textarea, Badge } from '../components/UI';
 import { Manual } from '../types';
 
@@ -17,6 +18,9 @@ export default function ManualsPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [rlsError, setRlsError] = useState<string | null>(null);
+  const [equipmentId, setEquipmentId] = useState('');
+  const [uploadLogs, setUploadLogs] = useState<string[]>([]);
+  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   
   const [formData, setFormData] = useState<Omit<Manual, 'id'>>({
     equipment_name: '',
@@ -36,10 +40,10 @@ export default function ManualsPage() {
 
   const createMutation = useMutation({
     mutationFn: (data: Omit<Manual, 'id'>) => dataService.saveManual(data),
-    onSuccess: () => {
+    onSuccess: async (savedManual) => {
       queryClient.invalidateQueries({ queryKey: ['manuals'] });
       setShowForm(false);
-      setFormData({
+      const resetForm = () => setFormData({
         equipment_name: '',
         brand: '',
         model: '',
@@ -49,7 +53,27 @@ export default function ManualsPage() {
         file_url: '',
         file_name: ''
       });
-      toast.success('Manual adicionado com sucesso!');
+      // Se tiver arquivo pendente, processa embeddings em segundo plano
+      if (pendingFilePath && savedManual?.id) {
+        const fp = pendingFilePath;
+        const eqId = equipmentId.trim();
+        setPendingFilePath(null);
+        toast.success('Manual salvo! Processando embeddings...');
+        try {
+          await manualService.processManualSections(
+            savedManual.id,
+            fp,
+            eqId,
+            handleProgressUpdate,
+          );
+          toast.success('Embeddings gerados com sucesso!');
+        } catch (err: any) {
+          toast.error('Manual salvo, mas falha nos embeddings: ' + err.message);
+        }
+      } else {
+        toast.success('Manual adicionado com sucesso!');
+      }
+      resetForm();
     },
     onError: (error: any) => {
       toast.error('Erro ao salvar: ' + error.message);
@@ -64,25 +88,41 @@ export default function ManualsPage() {
     }
   });
 
+  const handleProgressUpdate = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const entry = `${timestamp} · ${message}`;
+    setUploadLogs((prev) => [...prev.slice(-4), entry]);
+    console.log('[ManualsPage] upload progress:', message);
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const sanitizedEquipmentId = equipmentId.trim();
+
     setIsUploading(true);
     setRlsError(null);
+    setUploadLogs([]);
     try {
-      const result = await dataService.uploadFile(file);
+      const result = await manualService.uploadFile(
+        file,
+        sanitizedEquipmentId,
+        handleProgressUpdate,
+      );
+      setPendingFilePath(result.filePath);
       setFormData(prev => ({
         ...prev,
-        file_url: result.file_url,
-        file_name: result.file_name
+        file_url: result.fileUrl,
+        file_name: result.fileName,
       }));
-      toast.success('Upload concluído!');
+      toast.success('Arquivo enviado! Preencha os dados e salve o manual.');
     } catch (error: any) {
-      if (error.message?.includes('row-level security') || error.message?.includes('RLS')) {
-        setRlsError('tecnoloc_assets');
+      console.error('[ManualsPage] erro no upload', error);
+      toast.error(error?.message || 'Erro ao enviar arquivo');
+      if (error?.message?.toLowerCase().includes('rls') || error?.message?.toLowerCase().includes('policy')) {
+        setRlsError(error.message);
       }
-      toast.error('Erro no Supabase Storage: ' + error.message);
     } finally {
       setIsUploading(false);
     }
@@ -193,6 +233,14 @@ create policy "Acesso Público Delete" on storage.objects for delete using (buck
                     />
                   </div>
                   <div className="space-y-1">
+                    <Label>ID do Equipamento <span className="text-slate-400 font-normal text-xs">(UUID opcional)</span></Label>
+                    <Input
+                      value={equipmentId}
+                      onChange={(e) => setEquipmentId(e.target.value)}
+                      placeholder="Cole o UUID do equipamento (opcional)"
+                    />
+                  </div>
+                  <div className="space-y-1">
                     <Label>Marca</Label>
                     <Input
                       value={formData.brand}
@@ -266,6 +314,16 @@ create policy "Acesso Público Delete" on storage.objects for delete using (buck
                     <div className="flex items-center gap-2 mt-3 px-4 py-2 bg-green-100/50 rounded-xl border border-green-100 text-green-700 w-fit">
                       <CheckCircle2 className="w-4 h-4" />
                       <span className="text-sm font-bold">Pronto para salvar: {formData.file_name}</span>
+                    </div>
+                  )}
+                  {uploadLogs.length > 0 && (
+                    <div className="mt-3 w-full rounded-2xl bg-slate-900 text-slate-100 p-4 text-xs font-mono space-y-1">
+                      {uploadLogs.map((log, index) => (
+                        <p key={`${log}-${index}`} className="flex items-center gap-2">
+                          <span className="inline-flex h-2 w-2 rounded-full bg-indigo-400" />
+                          {log}
+                        </p>
+                      ))}
                     </div>
                   )}
                 </div>

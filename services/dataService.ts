@@ -2,13 +2,11 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { MaintenanceLog, Manual } from '../types';
 
-// Função para buscar credenciais priorizando process.env para compatibilidade total
+// Função para buscar credenciais priorizando import.meta.env no navegador
 const getCredential = (key: string): string | undefined => {
   const viteKey = `VITE_${key}`;
-  return (process.env as any)[key] || 
-         (process.env as any)[viteKey] || 
-         (import.meta as any).env?.[viteKey] || 
-         (import.meta as any).env?.[key];
+  return (import.meta.env as any)[viteKey] || 
+         (import.meta.env as any)[key];
 };
 
 let supabaseInstance: SupabaseClient | null = null;
@@ -115,6 +113,54 @@ export const dataService = {
     if (!sb || !modelName) return undefined;
     const { data, error } = await sb.from('manuals').select('*').ilike('model', `%${modelName}%`).limit(1);
     return error ? undefined : data?.[0];
+  },
+
+  findManualByName: async (equipmentName: string, model?: string): Promise<Manual | undefined> => {
+    const sb = getSupabase();
+    if (!sb) return undefined;
+    // Tenta por modelo primeiro
+    if (model?.trim()) {
+      const { data: byModel } = await sb.from('manuals').select('*').ilike('model', `%${model.trim()}%`).limit(1);
+      if (byModel?.[0]) return byModel[0];
+    }
+    // Fallback: busca por nome do equipamento
+    if (equipmentName?.trim()) {
+      const { data: byName } = await sb.from('manuals').select('*').ilike('equipment_name', `%${equipmentName.trim()}%`).limit(1);
+      if (byName?.[0]) return byName[0];
+    }
+    return undefined;
+  },
+
+  getManualSections: async (manualId: string): Promise<string> => {
+    const sb = getSupabase();
+    if (!sb || !manualId) return '';
+    // Busca TODOS os chunks — sem limite, pois o GPT-4o suporta 128k tokens
+    const { data, error } = await sb
+      .from('manual_sections')
+      .select('content')
+      .eq('manual_id', manualId)
+      .order('id', { ascending: true });
+    if (error || !data?.length) return '';
+    return data.map((r: any) => r.content).join('\n\n');
+  },
+
+  /**
+   * Busca semântica: gera embedding da query e retorna os chunks mais relevantes.
+   * Requer a função match_manual_sections no Supabase (pgvector).
+   */
+  semanticSearchManual: async (query: string, manualId: string, topK = 10): Promise<string> => {
+    try {
+      const response = await fetch('/api/search-manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, manualId, topK }),
+      });
+      if (!response.ok) return '';
+      const data = await response.json();
+      return Array.isArray(data.chunks) ? data.chunks.join('\n\n') : '';
+    } catch {
+      return '';
+    }
   },
 
   uploadFile: async (file: File): Promise<{ file_url: string; file_name: string }> => {

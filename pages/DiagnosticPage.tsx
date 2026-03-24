@@ -53,7 +53,25 @@ export default function DiagnosticPage() {
     setDiagnosisResult(null);
 
     try {
-      const manual = await dataService.findManualByModel(formData.model);
+      const manual = await dataService.findManualByName(formData.equipment_name, formData.model);
+
+      // RAG: busca semântica pelos trechos mais relevantes para o defeito descrito
+      let manualContent: string | null = null;
+      if (manual?.id) {
+        const query = `${formData.defect_description} ${formData.defect_category} ${formData.equipment_name}`;
+        manualContent = await dataService.semanticSearchManual(query, manual.id, 20);
+        // Fallback: se busca semântica falhar (função pgvector não criada), usa chunks sequenciais
+        if (!manualContent) {
+          manualContent = await dataService.getManualSections(manual.id);
+        }
+      }
+
+      console.log('[Diagnóstico] Manual encontrado:', manual?.equipment_name ?? 'NENHUM');
+      console.log('[Diagnóstico] Conteúdo do manual (chars):', manualContent?.length ?? 0);
+      if (!manualContent) {
+        console.warn('[Diagnóstico] ATENÇÃO: manual_sections vazio. Re-envie o manual em Manuais Técnicos.');
+      }
+
       const allLogs = await dataService.getLogs();
       const fieldTips = allLogs
         .filter(l => l.equipment_model === formData.model || l.defect_category === formData.defect_category)
@@ -78,9 +96,10 @@ export default function DiagnosticPage() {
           defect: formData.defect_description, 
           category: formData.defect_category 
         },
-        manual?.description || null,
+        manualContent || manual?.description || null,
         fieldTips || null,
-        base64Image
+        base64Image,
+        manual?.id || null
       );
 
       // #region agent log
