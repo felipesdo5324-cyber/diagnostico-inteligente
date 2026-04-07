@@ -141,8 +141,16 @@ export const dataService = {
     if (!sb || !email) return null;
     const normalizedEmail = email.trim().toLowerCase();
     console.log('🔍 Buscando role para email:', normalizedEmail);
-    const { data, error } = await sb.from('user_roles').select('role').eq('email', normalizedEmail).single();
-    console.log('📊 Resultado da query:', { data, error });
+    
+    // Primeiro, listar TODOS os registros para debug
+    const { data: allRoles, error: allError } = await sb.from('user_roles').select('email, role');
+    console.log('📋 Todos os roles na tabela:', allRoles);
+    if (allError) console.warn('⚠️ Erro ao listar todos:', allError.message);
+    
+    // Agora buscar o role específico
+    const { data, error } = await sb.from('user_roles').select('role').eq('email', normalizedEmail).maybeSingle();
+    console.log('📊 Resultado da query para', normalizedEmail, ':', { data, error });
+    
     if (error) {
       console.warn('⚠️ Erro ao buscar role:', error.message);
       return null;
