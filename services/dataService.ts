@@ -140,8 +140,14 @@ export const dataService = {
     const sb = getSupabase();
     if (!sb || !email) return null;
     const normalizedEmail = email.trim().toLowerCase();
+    console.log('🔍 Buscando role para email:', normalizedEmail);
     const { data, error } = await sb.from('user_roles').select('role').eq('email', normalizedEmail).single();
-    if (error) return null;
+    console.log('📊 Resultado da query:', { data, error });
+    if (error) {
+      console.warn('⚠️ Erro ao buscar role:', error.message);
+      return null;
+    }
+    console.log('✅ Role encontrado:', data?.role);
     return data?.role ?? null;
   },
 
