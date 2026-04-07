@@ -56,10 +56,14 @@ export default function Home() {
   const location = useLocation();
 
   useEffect(() => {
+    // Limpar cache de sessão ao montar
+    sessionStorage.removeItem('userRole');
+    
     dataService.getCurrentUser().then(async (u) => {
       setUser(u);
       if (u?.email) {
         const currentRole = await dataService.getCurrentUserRole();
+        console.log('📋 Role carregado para', u.email, ':', currentRole);
         setRole(currentRole ?? 'usuario');
       }
       setLoadingUser(false);

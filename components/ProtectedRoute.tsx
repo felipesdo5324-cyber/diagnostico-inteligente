@@ -20,6 +20,7 @@ export const ProtectedRoute: React.FC<PropsWithChildren<ProtectedRouteProps>> = 
       const user = await dataService.getCurrentUser();
       const role = await dataService.getCurrentUserRole();
       const effectiveRole = role ?? 'usuario';
+      console.log('🔐 ProtectedRoute - User:', user?.email, 'Role:', effectiveRole, 'adminOnly:', adminOnly);
       setAuthenticated(!!user);
       setUserRole(effectiveRole);
       setLoading(false);
