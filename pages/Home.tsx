@@ -52,12 +52,16 @@ import { useLocation } from 'react-router-dom';
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
-  const ADMIN_EMAILS = ['felipe.sdo17@gmail.com'];
+  const [role, setRole] = useState<'admin' | 'gestor' | 'usuario'>('usuario');
   const location = useLocation();
 
   useEffect(() => {
-    dataService.getCurrentUser().then((u) => {
+    dataService.getCurrentUser().then(async (u) => {
       setUser(u);
+      if (u?.email) {
+        const currentRole = await dataService.getCurrentUserRole();
+        setRole(currentRole ?? 'usuario');
+      }
       setLoadingUser(false);
     });
   }, []);
@@ -68,7 +72,7 @@ export default function Home() {
     }
   };
 
-  const isAdmin = Boolean(user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase()));
+  const isAdmin = role === 'admin';
   const hasUser = user !== null;
 
   return (
@@ -135,7 +139,10 @@ export default function Home() {
           <NavCard to="/checklist" title="Checklist" description="Inspeção rigorosa de entrada e saída para garantir a qualidade dos equipamentos alugados." icon={<ClipboardCheck className="w-8 h-8 text-white" />} color="orange" />
           <NavCard to="/historico" title="Histórico" description="Acesse o registro completo de diagnósticos anteriores e soluções aplicadas pelos técnicos." icon={<History className="w-8 h-8 text-white" />} color="green" />
           {isAdmin ? (
-            <NavCard to="/cadastro-manuais" title="Manual de Falhas" description="Cadastre e consulte manuais exclusivos para falhas e resoluções usados pela IA." icon={<FileText className="w-8 h-8 text-white" />} color="blue" />
+            <>
+              <NavCard to="/cadastro-manuais" title="Manual de Falhas" description="Cadastre e consulte manuais exclusivos para falhas e resoluções usados pela IA." icon={<FileText className="w-8 h-8 text-white" />} color="blue" />
+              <NavCard to="/gestao-acesso" title="Gestão de Acesso" description="Defina se cada usuário será administrador, gestor ou usuário comum." icon={<ShieldCheck className="w-8 h-8 text-white" />} color="green" />
+            </>
           ) : (
             <div className="col-span-full bg-white/10 border border-white/20 rounded-2xl p-4 text-center text-white/80">
               {loadingUser

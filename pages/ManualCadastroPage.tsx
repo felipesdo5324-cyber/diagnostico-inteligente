@@ -9,16 +9,20 @@ interface FailureManual {
   titulo: string;
   categoria: 'eletrica' | 'mecanica';
   equipamento: string;
+  marca: string;
   modelo: string;
   falha: string;
   resolucao: string;
+  attachment_url?: string;
   created_at: string;
 }
 
 export default function ManualCadastroPage() {
   const [abaAtiva, setAbaAtiva] = useState<'upload' | 'visualizacao'>('upload');
   const [fileSelected, setFileSelected] = useState<File | null>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [equipamento, setEquipamento] = useState('');
+  const [marca, setMarca] = useState('');
   const [modelo, setModelo] = useState('');
   const [categoria, setCategoria] = useState<'eletrica' | 'mecanica'>('mecanica');
   const [uploading, setUploading] = useState(false);
@@ -47,6 +51,12 @@ export default function ManualCadastroPage() {
     }
   };
 
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.[0]) {
+      setPhotoFile(e.target.files[0]);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -60,6 +70,11 @@ export default function ManualCadastroPage() {
       return;
     }
 
+    if (!marca.trim()) {
+      toast.error('Preencha a marca');
+      return;
+    }
+
     if (!modelo.trim()) {
       toast.error('Preencha o modelo');
       return;
@@ -68,12 +83,18 @@ export default function ManualCadastroPage() {
     setUploading(true);
     try {
       const { file_path } = await dataService.uploadFile(fileSelected);
+      let photoUrl: string | undefined;
+      if (photoFile) {
+        const photoUpload = await dataService.uploadFile(photoFile);
+        photoUrl = photoUpload.file_url;
+      }
+
       toast.loading('Upload do PDF concluído, processando no servidor...');
 
       const response = await fetch('/api/extract-failures', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: file_path, equipamento, modelo, categoria }),
+        body: JSON.stringify({ filePath: file_path, equipamento, marca, modelo, categoria }),
       });
 
       if (!response.ok) {
@@ -93,15 +114,19 @@ export default function ManualCadastroPage() {
           titulo: `${equipamento} - ${failure.titulo}`,
           categoria,
           equipamento,
+          marca,
           modelo,
           falha: failure.falha,
           resolucao: failure.resolucao,
+          attachment_url: photoUrl,
         });
       }
 
       toast.success(`${extracted.length} falhas foram cadastradas com sucesso!`);
       setFileSelected(null);
+      setPhotoFile(null);
       setEquipamento('');
+      setMarca('');
       setModelo('');
       setAbaAtiva('visualizacao');
       carregarManuais();
@@ -204,6 +229,17 @@ export default function ManualCadastroPage() {
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Marca</label>
+                <input
+                  type="text"
+                  value={marca}
+                  onChange={(e) => setMarca(e.target.value)}
+                  placeholder="Ex: Cummins"
+                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Modelo</label>
                 <input
                   type="text"
@@ -212,6 +248,19 @@ export default function ManualCadastroPage() {
                   placeholder="Ex: ISF 3.8"
                   className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Foto do Alarme (opcional)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoSelect}
+                  className="w-full text-sm text-slate-600"
+                />
+                {photoFile && (
+                  <p className="text-xs text-slate-500 mt-2">Arquivo selecionado: {photoFile.name}</p>
+                )}
               </div>
 
               <div>
@@ -266,9 +315,15 @@ export default function ManualCadastroPage() {
                         </span>
                       </div>
                       <p className="text-sm text-slate-600 mb-2"><strong>Equipamento:</strong> {manual.equipamento}</p>
+                      <p className="text-sm text-slate-600 mb-2"><strong>Marca:</strong> {manual.marca}</p>
                       <p className="text-sm text-slate-600 mb-2"><strong>Modelo:</strong> {manual.modelo}</p>
                       <p className="text-sm text-slate-700 mb-2"><strong>Falha:</strong> {manual.falha}</p>
-                      <p className="text-sm text-slate-700"><strong>Resolução:</strong> {manual.resolucao}</p>
+                      <p className="text-sm text-slate-700 mb-2"><strong>Resolução:</strong> {manual.resolucao}</p>
+                      {manual.attachment_url && (
+                        <a href={manual.attachment_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm">
+                          Ver foto do alarme
+                        </a>
+                      )}
                     </div>
                     <button
                       onClick={() => handleDelete(manual.id)}

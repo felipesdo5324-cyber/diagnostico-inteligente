@@ -2,11 +2,16 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { MaintenanceLog, Manual } from '../types';
 
+declare global {
+  interface ImportMeta {
+    env: any;
+  }
+}
+
 // Função para buscar credenciais priorizando import.meta.env no navegador
 const getCredential = (key: string): string | undefined => {
   const viteKey = `VITE_${key}`;
-  return (import.meta.env as any)[viteKey] || 
-         (import.meta.env as any)[key];
+  return import.meta.env[viteKey] || import.meta.env[key];
 };
 
 let supabaseInstance: SupabaseClient | null = null;
@@ -131,6 +136,37 @@ export const dataService = {
     return undefined;
   },
 
+  getUserRoleByEmail: async (email: string): Promise<'admin' | 'gestor' | 'usuario' | null> => {
+    const sb = getSupabase();
+    if (!sb || !email) return null;
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data, error } = await sb.from('user_roles').select('role').eq('email', normalizedEmail).single();
+    if (error) return null;
+    return data?.role ?? null;
+  },
+
+  getCurrentUserRole: async (): Promise<'admin' | 'gestor' | 'usuario' | null> => {
+    const user = await dataService.getCurrentUser();
+    if (!user?.email) return null;
+    const role = await dataService.getUserRoleByEmail(user.email);
+    return role ?? 'usuario';
+  },
+
+  getUserRoles: async (): Promise<Array<{ id: string; email: string; role: 'admin' | 'gestor' | 'usuario'; created_at?: string }>> => {
+    const sb = getSupabase();
+    if (!sb) return [];
+    const { data, error } = await sb.from('user_roles').select('*').order('email', { ascending: true });
+    return error ? [] : (data || []);
+  },
+
+  setUserRole: async (email: string, role: 'admin' | 'gestor' | 'usuario'): Promise<void> => {
+    const sb = getSupabase();
+    if (!sb) throw new Error('Configuração do Supabase ausente.');
+    const normalizedEmail = email.trim().toLowerCase();
+    const { error } = await sb.from('user_roles').upsert({ email: normalizedEmail, role }, { onConflict: 'email' });
+    if (error) throw error;
+  },
+
   getManualSections: async (manualId: string): Promise<string> => {
     const sb = getSupabase();
     if (!sb || !manualId) return '';
@@ -179,9 +215,11 @@ export const dataService = {
     titulo: string;
     categoria: 'eletrica' | 'mecanica';
     equipamento: string;
+    marca: string;
     modelo: string;
     falha: string;
     resolucao: string;
+    attachment_url?: string | null;
   }): Promise<void> => {
     const sb = getSupabase();
     if (!sb) throw new Error("Configuração do Supabase ausente.");

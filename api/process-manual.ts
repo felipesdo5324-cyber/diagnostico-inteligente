@@ -16,13 +16,52 @@ const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const createChunks = (text: string, size = 1000, overlap = 150) => {
+const normalizeText = (text: string) => text.replace(/\r\n/g, '\n').replace(/\n{2,}/g, '\n\n').trim();
+
+const splitParagraphs = (text: string) => {
+  const normalized = normalizeText(text);
+  return normalized
+    .split(/\n{2,}/g)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+};
+
+const splitLongParagraph = (paragraph: string, maxLength = 900) => {
+  const sentenceParts = paragraph.split(/(?<=[.!?])\s+/);
   const chunks: string[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    chunks.push(text.slice(cursor, cursor + size));
-    cursor += Math.max(1, size - overlap);
+  let current = '';
+
+  for (const sentence of sentenceParts) {
+    const trimmedSentence = sentence.trim();
+    if (!trimmedSentence) continue;
+
+    if ((current + ' ' + trimmedSentence).trim().length <= maxLength) {
+      current = `${current} ${trimmedSentence}`.trim();
+    } else {
+      if (current) chunks.push(current);
+      current = trimmedSentence;
+    }
   }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks;
+};
+
+const createChunks = (text: string, size = 900) => {
+  const paragraphs = splitParagraphs(text);
+  const chunks: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.length <= size) {
+      chunks.push(paragraph);
+    } else {
+      chunks.push(...splitLongParagraph(paragraph, size));
+    }
+  }
+
   return chunks;
 };
 

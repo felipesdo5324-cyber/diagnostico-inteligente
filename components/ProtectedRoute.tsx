@@ -6,21 +6,22 @@ import { LoadingOverlay } from './UI';
 
 interface ProtectedRouteProps {
   adminOnly?: boolean;
+  allowedRoles?: Array<'admin' | 'gestor' | 'usuario'>;
 }
 
-export const ProtectedRoute: React.FC<PropsWithChildren<ProtectedRouteProps>> = ({ children, adminOnly = false }) => {
+export const ProtectedRoute: React.FC<PropsWithChildren<ProtectedRouteProps>> = ({ children, adminOnly = false, allowedRoles }) => {
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [userRole, setUserRole] = useState<'admin' | 'gestor' | 'usuario' | null>(null);
   const location = useLocation();
-
-  const ADMIN_EMAILS = ['felipe.sdo17@gmail.com'];
 
   useEffect(() => {
     const checkAuth = async () => {
       const user = await dataService.getCurrentUser();
+      const role = await dataService.getCurrentUserRole();
+      const effectiveRole = role ?? 'usuario';
       setAuthenticated(!!user);
-      setIsAdmin(!!user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase()));
+      setUserRole(effectiveRole);
       setLoading(false);
     };
     checkAuth();
@@ -32,7 +33,11 @@ export const ProtectedRoute: React.FC<PropsWithChildren<ProtectedRouteProps>> = 
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (adminOnly && !isAdmin) {
+  if (adminOnly && userRole !== 'admin') {
+    return <Navigate to="/" state={{ accessDenied: true }} replace />;
+  }
+
+  if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
     return <Navigate to="/" state={{ accessDenied: true }} replace />;
   }
 

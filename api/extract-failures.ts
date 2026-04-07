@@ -24,9 +24,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { filePath, equipamento, modelo, categoria } = req.body as {
+    const { filePath, equipamento, marca, modelo, categoria } = req.body as {
       filePath: string;
       equipamento: string;
+      marca?: string;
       modelo: string;
       categoria: 'eletrica' | 'mecanica';
     };
@@ -57,6 +58,7 @@ Cada item deve conter: titulo, falha, resolucao.
 Seja objetivo e evite texto extra fora do JSON.
 
 EQUIPAMENTO: ${equipamento}
+MARCA: ${marca || 'Não informada'}
 MODELO: ${modelo}
 CATEGORIA: ${categoria}
 

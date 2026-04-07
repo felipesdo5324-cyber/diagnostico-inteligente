@@ -221,7 +221,7 @@ export default function DiagnosticPage() {
             <Button onClick={handleAnalyze} disabled={isAnalyzing} className="w-full h-14 font-black uppercase text-lg bg-indigo-600 shadow-xl">
               {isAnalyzing ? (
                 <>
-                  <Loader2 className="animate-spin mr-2" /> Analisando com ChatGPT (OpenAI)...
+                  <Loader2 className="animate-spin mr-2" /> Analisando falha...
                 </>
               ) : (
                 <>

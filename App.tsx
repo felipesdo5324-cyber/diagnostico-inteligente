@@ -15,6 +15,7 @@ const ManualsPage = lazy(() => import('./pages/ManualsPage'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage'));
 const ChecklistPage = lazy(() => import('./pages/ChecklistPage'));
 const ManualCadastroPage = lazy(() => import('./pages/ManualCadastroPage'));
+const UserManagementPage = lazy(() => import('./pages/UserManagementPage'));
 
 const queryClient = new QueryClient();
 
@@ -31,7 +32,7 @@ const App: React.FC = () => {
             } />
             
             <Route path="/dashboard" element={
-              <ProtectedRoute children={<Dashboard />} />
+              <ProtectedRoute allowedRoles={['admin', 'gestor']} children={<Dashboard />} />
             } />
             
             <Route path="/diagnostico" element={
@@ -48,6 +49,10 @@ const App: React.FC = () => {
             
             <Route path="/checklist" element={
               <ProtectedRoute children={<ChecklistPage />} />
+            } />
+
+            <Route path="/gestao-acesso" element={
+              <ProtectedRoute adminOnly={true} children={<UserManagementPage />} />
             } />
 
             <Route path="/cadastro-manuais" element={

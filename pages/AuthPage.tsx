@@ -38,7 +38,8 @@ export default function AuthPage() {
         }
       } else {
         await dataService.signUp(email, password);
-        toast.success("Conta criada com sucesso!");
+        await dataService.setUserRole(email, 'usuario');
+        toast.success("Conta criada com sucesso! Perfil padrão de usuário criado.");
         setIsLogin(true);
       }
     } catch (error: any) {

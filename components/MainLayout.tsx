@@ -8,17 +8,21 @@ import { User } from '@supabase/supabase-js';
 export const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
-  const ADMIN_EMAIL = 'felipe.sdo17@gmail.com';
+  const [role, setRole] = useState<'admin' | 'gestor' | 'usuario' | 'unknown'>('unknown');
 
   useEffect(() => {
     const fetchUser = async () => {
       const currentUser = await dataService.getCurrentUser();
       setUser(currentUser);
+      if (currentUser?.email) {
+        const currentRole = await dataService.getCurrentUserRole();
+        setRole(currentRole ?? 'usuario');
+      }
     };
     fetchUser();
   }, []);
 
-  const isAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const isAdmin = role === 'admin';
 
   return (
     <div className="app-layout"> {/* Classe que criamos no index.css */}
@@ -47,6 +51,11 @@ export const MainLayout: React.FC = () => {
           <Link to="/manuais" className="flex items-center px-4 py-3 text-slate-300 hover:bg-slate-800 hover:text-white rounded-lg transition-colors">
             <FileText className="mr-3 h-5 w-5" /> Manuais
           </Link>
+          {isAdmin && (
+            <Link to="/gestao-acesso" className="flex items-center px-4 py-3 text-slate-300 hover:bg-slate-800 hover:text-white rounded-lg transition-colors">
+              <ShieldCheck className="mr-3 h-5 w-5" /> Gestão de Acesso
+            </Link>
+          )}
         </nav>
 
         <div className="p-4 border-t border-slate-800">
@@ -65,7 +74,9 @@ export const MainLayout: React.FC = () => {
               <p className="text-sm font-semibold text-slate-900">{user?.email?.split('@')[0]}</p>
               <div className="flex items-center justify-end gap-1">
                 {isAdmin && <ShieldCheck className="w-3 h-3 text-indigo-600" />}
-                <p className="text-xs text-slate-500">{isAdmin ? 'Administrador' : 'Técnico Sênior'}</p>
+                <p className="text-xs text-slate-500">
+                  {role === 'admin' ? 'Administrador' : role === 'gestor' ? 'Gestor' : 'Usuário'}
+                </p>
               </div>
             </div>
           </div>

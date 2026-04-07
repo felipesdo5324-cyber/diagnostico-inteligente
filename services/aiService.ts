@@ -250,23 +250,12 @@ DEFEITO RELATADO: "${equipmentInfo.defect}"
 
 Gere um diagnóstico técnico rigoroso com no mínimo 3 causas prováveis e um plano de ação detalhado.`;
 
-    // Montagem do conteúdo da mensagem do usuário (Texto + Imagem Opcional)
-    let userContent: any;
-    
-    if (imageBase64) {
-      userContent = [
-        { type: "text", text: userPrompt },
-        { 
-          type: "image_url", 
-          image_url: { 
-            url: `data:image/jpeg;base64,${imageBase64}`,
-            detail: "high"
-          } 
-        }
-      ];
-    } else {
-      userContent = userPrompt;
-    }
+    // Montagem do conteúdo da mensagem do usuário (texto com nota de imagem opcional)
+    const imageNote = imageBase64
+      ? `\n\nOBS.: Foi anexada uma foto do defeito/alarme. Use essa informação como referência adicional e priorize a análise do texto e do manual.`
+      : '';
+
+    const userContent = `${userPrompt}${imageNote}`;
 
     try {
       const response = await openai.chat.completions.create({

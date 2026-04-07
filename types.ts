@@ -33,3 +33,10 @@ export interface Manual {
   file_url: string;
   file_name: string;
 }
+
+export interface UserRoleRecord {
+  id: string;
+  email: string;
+  role: 'admin' | 'gestor' | 'usuario';
+  created_at: string;
+}
