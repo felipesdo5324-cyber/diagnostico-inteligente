@@ -24,8 +24,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { filePath, equipamento, marca, modelo, categoria } = req.body as {
+    const { filePath, photoUrl, equipamento, marca, modelo, categoria } = req.body as {
       filePath: string;
+      photoUrl?: string;
       equipamento: string;
       marca?: string;
       modelo: string;
@@ -48,12 +49,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const pdfResult = await pdfParse(buffer);
     const fullText = pdfResult.text?.trim() ?? '';
 
-    if (!fullText) {
-      return res.status(400).json({ success: false, error: 'Não foi possível extrair texto do PDF' });
+    if (!fullText && !photoUrl) {
+      return res.status(400).json({ success: false, error: 'Não foi possível extrair texto do PDF e não foi enviada imagem do alarme.' });
     }
 
-    const prompt = `Você é um assistente técnico para extração.
-Baseado no texto abaixo extraído do PDF, devolva apenas JSON válido com um array chamado "failures".
+    const prompt = `Você é um assistente técnico multimodal.
+Baseado nas informações abaixo, extraia as falhas e suas resoluções.
+Use o texto do PDF quando estiver disponível, e a imagem do alarme quando enviada.
+Devolva apenas JSON válido com um array chamado "failures".
 Cada item deve conter: titulo, falha, resolucao.
 Não inclua explicações, texto adicional ou qualquer outro campo fora do JSON.
 
@@ -62,14 +65,20 @@ MARCA: ${marca || 'Não informada'}
 MODELO: ${modelo}
 CATEGORIA: ${categoria}
 
-CONTEÚDO:
-${fullText}`;
+${fullText ? `CONTEÚDO DO PDF:\n${fullText}` : 'O PDF não contém texto legível.'}`;
+
+    const userMessageContent = photoUrl
+      ? [
+          { type: 'input_text', text: prompt },
+          { type: 'input_image', image_url: photoUrl }
+        ]
+      : prompt;
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: 'Extraia falhas/resoluções do manual em formato JSON conforme contrato.' },
-        { role: 'user', content: prompt },
+        { role: 'user', content: userMessageContent },
       ],
       temperature: 0.2,
       response_format: { type: 'json_object' },

@@ -94,7 +94,7 @@ export default function ManualCadastroPage() {
       const response = await fetch('/api/extract-failures', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: file_path, equipamento, marca, modelo, categoria }),
+        body: JSON.stringify({ filePath: file_path, photoUrl, equipamento, marca, modelo, categoria }),
       });
 
       if (!response.ok) {
