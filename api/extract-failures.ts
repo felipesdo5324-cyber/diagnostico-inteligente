@@ -53,12 +53,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: 'Não foi possível extrair texto do PDF e não foi enviada imagem do alarme.' });
     }
 
-    const prompt = `Você é um assistente técnico multimodal.
-Baseado nas informações abaixo, extraia as falhas e suas resoluções.
-Use o texto do PDF quando estiver disponível, e a imagem do alarme quando enviada.
-Devolva apenas JSON válido com um array chamado "failures".
-Cada item deve conter: titulo, falha, resolucao.
-Não inclua explicações, texto adicional ou qualquer outro campo fora do JSON.
+    const prompt = `Você é um assistente técnico multimodal especialista em diagnóstico de falhas e resolução de problemas de equipamentos.
+Leia cuidadosamente o conteúdo do PDF e, se for enviada, também a imagem do alarme.
+Extraia as falhas e suas resoluções exatamente como aparecem no manual, sem inventar nada.
+Se houver termos, códigos ou instruções específicas no manual, mantenha a terminologia exata.
+Se a imagem complementar indicar um alarme ou sintoma, correlate essa informação com a falha extraída do manual.
+
+Retorne apenas JSON válido com um array chamado "failures".
+Cada item deve conter:
+- titulo: título curto e descritivo da falha conforme o manual
+- falha: descrição completa do sintoma ou comportamento anormal
+- resolucao: passos de resolução detalhados ou procedimento técnico do manual
+
+NÃO inclua texto fora do JSON. NÃO insira comentários, explicações ou campos extras.
 
 EQUIPAMENTO: ${equipamento}
 MARCA: ${marca || 'Não informada'}
