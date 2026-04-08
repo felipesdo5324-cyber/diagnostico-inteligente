@@ -53,9 +53,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const prompt = `Você é um assistente técnico para extração.
-Baseado no texto abaixo extraído do PDF, devolva JSON com um array "failures".
+Baseado no texto abaixo extraído do PDF, devolva apenas JSON válido com um array chamado "failures".
 Cada item deve conter: titulo, falha, resolucao.
-Seja objetivo e evite texto extra fora do JSON.
+Não inclua explicações, texto adicional ou qualquer outro campo fora do JSON.
 
 EQUIPAMENTO: ${equipamento}
 MARCA: ${marca || 'Não informada'}
@@ -76,20 +76,37 @@ ${fullText}`;
       max_tokens: 1800,
     });
 
-    const text = completion.choices?.[0]?.message?.content;
-    if (!text) {
+    const content = completion.choices?.[0]?.message?.content;
+    const text = typeof content === 'string' ? content : content;
+
+    if (!content) {
       return res.status(500).json({ success: false, error: 'IA retornou resposta vazia.' });
     }
 
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (e) {
+    let parsed: any = null;
+    if (typeof content === 'object') {
+      parsed = content;
+    } else {
+      try {
+        parsed = JSON.parse(content);
+      } catch (e) {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch (nestedError) {
+            console.error('Erro ao parsear JSON após extração:', nestedError, 'conteúdo:', content);
+          }
+        }
+      }
+    }
+
+    if (!parsed || !Array.isArray(parsed.failures)) {
+      console.error('Resposta inválida da IA:', content);
       return res.status(500).json({ success: false, error: 'Resposta da IA não era JSON válido.' });
     }
 
-    const failures: Array<{ titulo: string; falha: string; resolucao: string }> =
-      Array.isArray(parsed.failures) ? parsed.failures : [];
+    const failures: Array<{ titulo: string; falha: string; resolucao: string }> = parsed.failures;
 
     if (failures.length === 0) {
       return res.status(400).json({ success: false, error: 'IA não extraiu falhas do PDF.' });
