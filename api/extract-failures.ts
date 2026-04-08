@@ -59,13 +59,17 @@ Extraia as falhas e suas resoluções exatamente como aparecem no manual, sem in
 Se houver termos, códigos ou instruções específicas no manual, mantenha a terminologia exata.
 Se a imagem complementar indicar um alarme ou sintoma, correlate essa informação com a falha extraída do manual.
 
-Retorne apenas JSON válido com um array chamado "failures".
-Cada item deve conter:
-- titulo: título curto e descritivo da falha conforme o manual
-- falha: descrição completa do sintoma ou comportamento anormal
-- resolucao: passos de resolução detalhados ou procedimento técnico do manual
+IMPORTANTE: Retorne APENAS o JSON abaixo, sem qualquer texto adicional antes ou depois.
 
-NÃO inclua texto fora do JSON. NÃO insira comentários, explicações ou campos extras.
+{
+  "failures": [
+    {
+      "titulo": "título curto e descritivo da falha conforme o manual",
+      "falha": "descrição completa do sintoma ou comportamento anormal",
+      "resolucao": "passos de resolução detalhados ou procedimento técnico do manual"
+    }
+  ]
+}
 
 EQUIPAMENTO: ${equipamento}
 MARCA: ${marca || 'Não informada'}
@@ -84,7 +88,7 @@ ${fullText ? `CONTEÚDO DO PDF:\n${fullText}` : 'O PDF não contém texto legív
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: 'Extraia falhas/resoluções do manual em formato JSON conforme contrato.' },
+        { role: 'system', content: 'Você é um assistente técnico que extrai falhas e resoluções de manuais. Sempre retorne apenas JSON válido no formato exato especificado. Nunca inclua texto adicional fora do JSON.' },
         { role: 'user', content: userMessageContent },
       ],
       temperature: 0.2,
@@ -94,6 +98,8 @@ ${fullText ? `CONTEÚDO DO PDF:\n${fullText}` : 'O PDF não contém texto legív
 
     const content = completion.choices?.[0]?.message?.content;
     const text = typeof content === 'string' ? content : content;
+
+    console.log('🔍 Resposta bruta da IA:', text);
 
     if (!content) {
       return res.status(500).json({ success: false, error: 'IA retornou resposta vazia.' });
@@ -106,19 +112,25 @@ ${fullText ? `CONTEÚDO DO PDF:\n${fullText}` : 'O PDF não contém texto legív
       try {
         parsed = JSON.parse(content);
       } catch (e) {
+        console.log('❌ Primeiro parse falhou, tentando extrair JSON do texto...');
         const jsonMatch = content.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           try {
             parsed = JSON.parse(jsonMatch[0]);
+            console.log('✅ JSON extraído com sucesso:', parsed);
           } catch (nestedError) {
-            console.error('Erro ao parsear JSON após extração:', nestedError, 'conteúdo:', content);
+            console.error('❌ Mesmo após extração, JSON inválido:', nestedError, 'conteúdo:', content);
+            return res.status(500).json({ success: false, error: 'Resposta da IA não era JSON válido.' });
           }
+        } else {
+          console.error('❌ Nenhum JSON encontrado na resposta:', content);
+          return res.status(500).json({ success: false, error: 'Resposta da IA não era JSON válido.' });
         }
       }
     }
 
     if (!parsed || !Array.isArray(parsed.failures)) {
-      console.error('Resposta inválida da IA:', content);
+      console.error('❌ Estrutura inválida - parsed:', parsed, 'failures:', parsed?.failures);
       return res.status(500).json({ success: false, error: 'Resposta da IA não era JSON válido.' });
     }
 
