@@ -226,26 +226,30 @@ export const dataService = {
   },
 
   saveFailureManual: async (data: {
-    titulo: string;
+    titulo?: string;
     categoria: 'eletrica' | 'mecanica';
     equipamento: string;
     marca: string;
     modelo: string;
-    falha: string;
-    resolucao: string;
+    codigo?: string | null;
+    descricao: string;
+    causa_provavel: string;
+    acao_tecnica: string;
     attachment_url?: string | null;
     fileUrl?: string | null;
   }): Promise<void> => {
     const sb = getSupabase();
     if (!sb) throw new Error("Configuração do Supabase ausente.");
     const insertRow = {
-      titulo: data.titulo,
+      titulo: data.titulo || `${data.equipamento} - ${data.descricao}`,
       categoria: data.categoria,
       equipamento: data.equipamento,
       marca: data.marca,
       modelo: data.modelo,
-      falha: data.falha,
-      resolucao: data.resolucao,
+      codigo: data.codigo ?? null,
+      descricao: data.descricao,
+      causa_provavel: data.causa_provavel,
+      acao_tecnica: data.acao_tecnica,
       attachment_url: data.attachment_url ?? null,
       file_url: data.fileUrl ?? null,
     };

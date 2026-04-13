@@ -61,30 +61,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: 'NÃ£o foi possÃ­vel extrair texto do PDF e nÃ£o foi enviada imagem do alarme.' });
     }
 
-    const prompt = `VocÃª Ã© um assistente tÃ©cnico multimodal especialista em diagnÃ³stico de falhas e resoluÃ§Ã£o de problemas de equipamentos.
-Leia cuidadosamente o conteÃºdo do PDF e, se for enviada, tambÃ©m a imagem do alarme.
-Extraia as falhas e suas resoluÃ§Ãµes exatamente como aparecem no manual, sem inventar nada.
-Se houver termos, cÃ³digos ou instruÃ§Ãµes especÃ­ficas no manual, mantenha a terminologia exata.
-Se a imagem complementar indicar um alarme ou sintoma, correlate essa informaÃ§Ã£o com a falha extraÃ­da do manual.
+    const prompt = `Você é um assistente técnico multimodal especialista em diagnóstico de falhas e resolução de problemas de equipamentos.
+Leia cuidadosamente o conteúdo do PDF e, se for enviada, também a imagem do alarme.
+Extraia as falhas com todos os seus dados: código (se disponível), descrição, causa provável e ação técnica/resolução.
+Mantenha a terminologia exata do manual. Se houver código (ex: 121, P0123), extraia-o.
+Se a imagem complementar indicar um alarme ou sintoma, correlate essa informação com a falha extraída.
 
 IMPORTANTE: Retorne APENAS o JSON abaixo, sem qualquer texto adicional antes ou depois.
 
 {
   "failures": [
     {
-      "titulo": "tÃ­tulo curto e descritivo da falha conforme o manual",
-      "falha": "descriÃ§Ã£o completa do sintoma ou comportamento anormal",
-      "resolucao": "passos de resoluÃ§Ã£o detalhados ou procedimento tÃ©cnico do manual"
+      "codigo": "código da falha se disponível, senão null",
+      "descricao": "descrição/nome curto da falha (ex: Perda de Sinal de Velocidade)",
+      "causa_provavel": "causa provável do problema conforme manual",
+      "acao_tecnica": "passos de resolução e ação técnica detalhados"
     }
   ]
 }
 
 EQUIPAMENTO: ${equipamento}
-MARCA: ${marca || 'NÃ£o informada'}
+MARCA: ${marca || 'Não informada'}
 MODELO: ${modelo}
 CATEGORIA: ${categoria}
 
-${fullText ? `CONTEÃšDO DO PDF:\n${fullText}` : 'O PDF nÃ£o contÃ©m texto legÃ­vel.'}`;
+${fullText ? `CONTEÚDO DO PDF:\n${fullText}` : 'O PDF não contém texto legível.'}`;
 
     const userMessageContent: MultimodalContent = photoUrl
       ? [
@@ -142,7 +143,7 @@ ${fullText ? `CONTEÃšDO DO PDF:\n${fullText}` : 'O PDF nÃ£o contÃ©m texto 
       return res.status(500).json({ success: false, error: 'Resposta da IA nÃ£o era JSON vÃ¡lido.' });
     }
 
-    const failures: Array<{ titulo: string; falha: string; resolucao: string }> = parsed.failures;
+    const failures: Array<{ codigo?: string | null; descricao: string; causa_provavel: string; acao_tecnica: string }> = parsed.failures;
 
     if (failures.length === 0) {
       return res.status(400).json({ success: false, error: 'IA nÃ£o extraiu falhas do PDF.' });

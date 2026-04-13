@@ -11,8 +11,12 @@ interface FailureManual {
   equipamento: string;
   marca: string;
   modelo: string;
-  falha: string;
-  resolucao: string;
+  codigo?: string | null;
+  descricao?: string;
+  causa_provavel?: string;
+  acao_tecnica?: string;
+  falha?: string;
+  resolucao?: string;
   attachment_url?: string;
   file_url?: string;
   created_at: string;
@@ -104,22 +108,30 @@ export default function ManualCadastroPage() {
       }
 
       const result = await response.json();
-      const extracted = result.failures as Array<{ titulo?: string; falha: string; resolucao: string; message?: string }>;
+      const extracted = result.failures as Array<{ 
+        codigo?: string | null;
+        descricao?: string;
+        titulo?: string;
+        falha?: string;
+        causa_provavel?: string;
+        acao_tecnica?: string;
+        resolucao?: string;
+      }>;
 
       if (!extracted || extracted.length === 0) {
         throw new Error('Nenhuma falha foi extraída do PDF');
       }
 
       for (const failure of extracted) {
-        const savedTitle = failure.message?.trim() ? failure.message : failure.titulo ?? 'Falha extraída';
         await dataService.saveFailureManual({
-          titulo: `${equipamento} - ${savedTitle}`,
           categoria,
           equipamento,
           marca,
           modelo,
-          falha: failure.falha,
-          resolucao: failure.resolucao,
+          codigo: failure.codigo || null,
+          descricao: failure.descricao || failure.titulo || 'Falha extraída',
+          causa_provavel: failure.causa_provavel || failure.falha || '',
+          acao_tecnica: failure.acao_tecnica || failure.resolucao || '',
           attachment_url: photoUrl,
           fileUrl: file_url,
         });
@@ -305,41 +317,98 @@ export default function ManualCadastroPage() {
             ) : (
               <div className="grid gap-4">
                 {manuais.map((manual) => (
-                  <div key={manual.id} className="bg-white rounded-lg shadow p-6 flex justify-between items-start hover:shadow-md transition">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-bold text-lg text-slate-900">{manual.titulo}</h3>
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          manual.categoria === 'mecanica'
-                            ? 'bg-orange-100 text-orange-800'
-                            : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {manual.categoria === 'mecanica' ? 'Mecânica' : 'Elétrica'}
-                        </span>
+                  <div key={manual.id} className="bg-white rounded-lg shadow p-6 hover:shadow-md transition">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="font-bold text-lg text-slate-900">{manual.titulo}</h3>
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            manual.categoria === 'mecanica'
+                              ? 'bg-orange-100 text-orange-800'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {manual.categoria === 'mecanica' ? 'Mecânica' : 'Elétrica'}
+                          </span>
+                        </div>
                       </div>
-                      <p className="text-sm text-slate-600 mb-2"><strong>Equipamento:</strong> {manual.equipamento}</p>
-                      <p className="text-sm text-slate-600 mb-2"><strong>Marca:</strong> {manual.marca}</p>
-                      <p className="text-sm text-slate-600 mb-2"><strong>Modelo:</strong> {manual.modelo}</p>
-                      <p className="text-sm text-slate-700 mb-2"><strong>Falha:</strong> {manual.falha}</p>
-                      <p className="text-sm text-slate-700 mb-2"><strong>Resolução:</strong> {manual.resolucao}</p>
+                      <button
+                        onClick={() => handleDelete(manual.id)}
+                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                        title="Deletar"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    {/* Grid de informações */}
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Equipamento</p>
+                        <p className="text-sm text-slate-700">{manual.equipamento}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Marca / Modelo</p>
+                        <p className="text-sm text-slate-700">{manual.marca} / {manual.modelo}</p>
+                      </div>
+                      {manual.codigo && (
+                        <div>
+                          <p className="text-xs text-slate-500 font-semibold uppercase">Código</p>
+                          <p className="text-sm text-slate-700 font-mono bg-slate-50 px-2 py-1 rounded">{manual.codigo}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Descrição */}
+                    {manual.descricao && (
+                      <div className="mb-4 pb-4 border-b border-slate-200">
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Descrição</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">{manual.descricao}</p>
+                      </div>
+                    )}
+
+                    {/* Causa Provável */}
+                    {manual.causa_provavel && (
+                      <div className="mb-4 pb-4 border-b border-slate-200">
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Causa Provável</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">{manual.causa_provavel}</p>
+                      </div>
+                    )}
+
+                    {/* Ação Técnica */}
+                    {manual.acao_tecnica && (
+                      <div className="mb-4">
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Ação Técnica (Resolução)</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">{manual.acao_tecnica}</p>
+                      </div>
+                    )}
+
+                    {/* Fallback para campos antigos */}
+                    {!manual.descricao && manual.falha && (
+                      <div className="mb-4 pb-4 border-b border-slate-200">
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Falha</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">{manual.falha}</p>
+                      </div>
+                    )}
+                    {!manual.acao_tecnica && manual.resolucao && (
+                      <div className="mb-4">
+                        <p className="text-xs text-slate-500 font-semibold uppercase">Resolução</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">{manual.resolucao}</p>
+                      </div>
+                    )}
+
+                    {/* Links para anexos */}
+                    <div className="flex gap-3 pt-4 border-t border-slate-200">
                       {manual.file_url && (
-                        <a href={manual.file_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm block mb-1">
-                          Ver PDF do manual
+                        <a href={manual.file_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm font-medium">
+                          📄 PDF
                         </a>
                       )}
                       {manual.attachment_url && (
-                        <a href={manual.attachment_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm">
-                          Ver foto do alarme
+                        <a href={manual.attachment_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm font-medium">
+                          📷 Foto
                         </a>
                       )}
                     </div>
-                    <button
-                      onClick={() => handleDelete(manual.id)}
-                      className="ml-4 p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
-                      title="Deletar"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
                   </div>
                 ))}
               </div>
