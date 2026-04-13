@@ -1,15 +1,32 @@
-﻿import type { VercelRequest, VercelResponse } from '@vercel/node';
+﻿// api/extract-failures.ts
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
 import pdfParse from 'pdf-parse';
 
-type MultimodalContent =
-  | string
-  | Array<
-      | { type: 'input_text'; text: string }
-      | { type: 'input_image'; image_url: string }
-    >;
+// ----------------------------------------------------------------
+// TIPOS
+// ----------------------------------------------------------------
+interface FailureItem {
+  codigo: string | null;
+  descricao: string;
+  causa_provavel: string;
+  acao_tecnica: string;
+}
 
+interface RequestBody {
+  filePath: string;
+  fileUrl?: string;
+  photoUrl?: string;
+  equipamento: string;
+  marca?: string;
+  modelo: string;
+  categoria: 'eletrica' | 'mecanica';
+}
+
+// ----------------------------------------------------------------
+// CLIENTES (inicialização segura)
+// ----------------------------------------------------------------
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -21,141 +38,212 @@ const supabase =
 
 const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null;
 
+// ----------------------------------------------------------------
+// LIMITES
+// ----------------------------------------------------------------
+const MAX_TEXT_CHARS = 30_000; // ~7.500 tokens — seguro para gpt-4o (128k ctx)
+const MAX_TOKENS_RESPONSE = 4_000; // suficiente para até ~40 falhas detalhadas
+
+// ----------------------------------------------------------------
+// LIMPEZA DE TEXTO EXTRAÍDO DO PDF
+// Resolve: \u0000 onde deveriam estar números, palavras cortadas na virada de página
+// ----------------------------------------------------------------
+function cleanPdfText(raw: string): string {
+  return raw
+    .replace(/\u0000/g, '')                          // null chars de encoding corrompido
+    .replace(/-\n([a-záàâãéêíóôõúüA-Z])/g, '$1')    // une palavras cortadas na virada de página
+    .replace(/([^\.\:\!\?])\n([a-záàâãéêíóôõúü])/g, '$1 $2') // une linhas do mesmo parágrafo
+    .replace(/[ \t]{2,}/g, ' ')                      // normaliza espaços múltiplos
+    .replace(/\n{3,}/g, '\n\n')                      // máximo 2 quebras consecutivas
+    .trim();
+}
+
+// ----------------------------------------------------------------
+// PARSE SEGURO DO JSON DA IA
+// ----------------------------------------------------------------
+function parseAIResponse(content: string): { failures: FailureItem[] } | null {
+  // Tentativa 1: parse direto
+  try {
+    return JSON.parse(content);
+  } catch (_) {}
+
+  // Tentativa 2: extrai o bloco JSON do texto (caso a IA adicione explicação)
+  const match = content.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]);
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+// ----------------------------------------------------------------
+// HANDLER PRINCIPAL
+// ----------------------------------------------------------------
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'MÃ©todo nÃ£o permitido' });
+    return res.status(405).json({ success: false, error: 'Método não permitido' });
   }
 
   if (!supabase || !openai) {
-    return res.status(500).json({ success: false, error: 'VariÃ¡veis de ambiente nÃ£o configuradas.' });
+    return res.status(500).json({ success: false, error: 'Variáveis de ambiente não configuradas.' });
   }
 
   try {
-    const { filePath, fileUrl, photoUrl, equipamento, marca, modelo, categoria } = req.body as {
-      filePath: string;
-      fileUrl?: string;
-      photoUrl?: string;
-      equipamento: string;
-      marca?: string;
-      modelo: string;
-      categoria: 'eletrica' | 'mecanica';
-    };
+    const {
+      filePath,
+      photoUrl,
+      equipamento,
+      marca,
+      modelo,
+      categoria,
+    } = req.body as RequestBody;
 
+    // Validação de campos obrigatórios
     if (!filePath || !equipamento || !modelo || !categoria) {
-      return res.status(400).json({ success: false, error: 'filePath, equipamento, modelo e categoria sÃ£o obrigatÃ³rios' });
+      return res.status(400).json({
+        success: false,
+        error: 'filePath, equipamento, modelo e categoria são obrigatórios',
+      });
     }
 
+    // ── 1. Download do PDF do Supabase Storage ──────────────────
     const { data: fileData, error: downloadError } = await supabase.storage
       .from('tecnoloc_assets')
       .download(filePath);
 
     if (downloadError || !fileData) {
-      return res.status(500).json({ success: false, error: downloadError?.message ?? 'Erro ao baixar arquivo' });
+      return res.status(500).json({
+        success: false,
+        error: downloadError?.message ?? 'Erro ao baixar arquivo do storage',
+      });
     }
 
+    // ── 2. Extração e limpeza do texto do PDF ───────────────────
     const buffer = Buffer.from(await fileData.arrayBuffer());
     const pdfResult = await pdfParse(buffer);
-    const fullText = pdfResult.text?.trim() ?? '';
+    const rawText = pdfResult.text?.trim() ?? '';
+    const cleanText = cleanPdfText(rawText);
 
-    if (!fullText && !photoUrl) {
-      return res.status(400).json({ success: false, error: 'NÃ£o foi possÃ­vel extrair texto do PDF e nÃ£o foi enviada imagem do alarme.' });
+    console.log(`[extract-failures] PDF extraído: ${cleanText.length} chars (raw: ${rawText.length})`);
+
+    if (!cleanText && !photoUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'Não foi possível extrair texto do PDF e nenhuma imagem de alarme foi enviada.',
+      });
     }
 
-    const prompt = `Você é um assistente técnico multimodal especialista em diagnóstico de falhas e resolução de problemas de equipamentos.
-Leia cuidadosamente o conteúdo do PDF e, se for enviada, também a imagem do alarme.
-Extraia as falhas com todos os seus dados: código (se disponível), descrição, causa provável e ação técnica/resolução.
-Mantenha a terminologia exata do manual. Se houver código (ex: 121, P0123), extraia-o.
-Se a imagem complementar indicar um alarme ou sintoma, correlate essa informação com a falha extraída.
+    // Trunca se necessário — evita estourar o context window e custo excessivo
+    const textForPrompt = cleanText.length > MAX_TEXT_CHARS
+      ? cleanText.slice(0, MAX_TEXT_CHARS) + '\n\n[... texto truncado por limite de tamanho ...]'
+      : cleanText;
 
-IMPORTANTE: Retorne APENAS o JSON abaixo, sem qualquer texto adicional antes ou depois.
+    // ── 3. Monta prompt ─────────────────────────────────────────
+    const systemPrompt = `Você é um engenheiro técnico especializado em análise de manuais de equipamentos industriais.
 
-{
-  "failures": [
-    {
-      "codigo": "código da falha se disponível, senão null",
-      "descricao": "descrição/nome curto da falha (ex: Perda de Sinal de Velocidade)",
-      "causa_provavel": "causa provável do problema conforme manual",
-      "acao_tecnica": "passos de resolução e ação técnica detalhados"
-    }
-  ]
-}
+MISSÃO: Extrair TODAS as falhas documentadas no manual com máxima fidelidade.
+
+REGRAS OBRIGATÓRIAS:
+1. Procure códigos de falha em tabelas, colunas e próximo a descrições (ex: "121 - Perda de Sinal")
+2. Formatos de código: numérico (121), alfanumérico (P0123, E001, F-10) ou null se ausente
+3. Para cada falha extraia: código, descrição, causa raiz e ação técnica completa
+4. Não invente dados — use apenas o que está no manual
+5. Se o manual tiver seções de dicas ou avisos gerais, inclua como falha com codigo: null
+6. Retorne APENAS JSON válido no formato especificado, sem texto adicional`;
+
+    const userPrompt = `Extraia TODAS as falhas do manual abaixo.
 
 EQUIPAMENTO: ${equipamento}
-MARCA: ${marca || 'Não informada'}
+MARCA: ${marca ?? 'Não informada'}
 MODELO: ${modelo}
 CATEGORIA: ${categoria}
 
-${fullText ? `CONTEÚDO DO PDF:\n${fullText}` : 'O PDF não contém texto legível.'}`;
+${textForPrompt ? `CONTEÚDO DO PDF:\n${textForPrompt}` : 'PDF sem texto legível — analise pela imagem do alarme.'}
 
-    const userMessageContent: MultimodalContent = photoUrl
-      ? [
-          { type: 'input_text' as const, text: prompt },
-          { type: 'input_image' as const, image_url: photoUrl }
-        ]
-      : prompt;
+Retorne SOMENTE este JSON:
+{
+  "failures": [
+    {
+      "codigo": "código ou null",
+      "descricao": "nome da falha",
+      "causa_provavel": "causa raiz detalhada",
+      "acao_tecnica": "passos de diagnóstico e resolução"
+    }
+  ]
+}`;
 
+    // ── 4. Monta mensagem multimodal (texto + imagem opcional) ──
+    type MessageContent =
+      | { type: 'text'; text: string }
+      | { type: 'image_url'; image_url: { url: string; detail: 'high' } };
+
+    const userContent: MessageContent[] = [{ type: 'text', text: userPrompt }];
+
+    if (photoUrl) {
+      userContent.push({
+        type: 'image_url',
+        image_url: { url: photoUrl, detail: 'high' },
+      });
+    }
+
+    // ── 5. Chamada ao GPT-4o ────────────────────────────────────
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: 'VocÃª Ã© um assistente tÃ©cnico que extrai falhas e resoluÃ§Ãµes de manuais. Sempre retorne apenas JSON vÃ¡lido no formato exato especificado. Nunca inclua texto adicional fora do JSON.' },
-        { role: 'user', content: userMessageContent as any },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
       ],
-      temperature: 0.2,
+      temperature: 0.1,              // baixo = mais determinístico para extração
       response_format: { type: 'json_object' },
-      max_tokens: 1800,
+      max_tokens: MAX_TOKENS_RESPONSE,
     });
 
-    const content = completion.choices?.[0]?.message?.content;
-    const text = typeof content === 'string' ? content : content;
+    const rawContent = completion.choices?.[0]?.message?.content ?? '';
 
-    console.log('ðŸ” Resposta bruta da IA:', text);
+    console.log(`[extract-failures] Resposta IA (${rawContent.length} chars):`, rawContent.slice(0, 300));
 
-    if (!content) {
-      return res.status(500).json({ success: false, error: 'IA retornou resposta vazia.' });
-    }
-
-    let parsed: any = null;
-    if (typeof content === 'object') {
-      parsed = content;
-    } else {
-      try {
-        parsed = JSON.parse(content);
-      } catch (e) {
-        console.log('âŒ Primeiro parse falhou, tentando extrair JSON do texto...');
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsed = JSON.parse(jsonMatch[0]);
-            console.log('âœ… JSON extraÃ­do com sucesso:', parsed);
-          } catch (nestedError) {
-            console.error('âŒ Mesmo apÃ³s extraÃ§Ã£o, JSON invÃ¡lido:', nestedError, 'conteÃºdo:', content);
-            return res.status(500).json({ success: false, error: 'Resposta da IA nÃ£o era JSON vÃ¡lido.' });
-          }
-        } else {
-          console.error('âŒ Nenhum JSON encontrado na resposta:', content);
-          return res.status(500).json({ success: false, error: 'Resposta da IA nÃ£o era JSON vÃ¡lido.' });
-        }
-      }
-    }
+    // ── 6. Parse da resposta ────────────────────────────────────
+    const parsed = parseAIResponse(rawContent);
 
     if (!parsed || !Array.isArray(parsed.failures)) {
-      console.error('âŒ Estrutura invÃ¡lida - parsed:', parsed, 'failures:', parsed?.failures);
-      return res.status(500).json({ success: false, error: 'Resposta da IA nÃ£o era JSON vÃ¡lido.' });
+      console.error('[extract-failures] Estrutura inválida:', rawContent);
+      return res.status(500).json({
+        success: false,
+        error: 'Resposta da IA com estrutura inválida.',
+      });
     }
 
-    const failures: Array<{ codigo?: string | null; descricao: string; causa_provavel: string; acao_tecnica: string }> = parsed.failures;
+    const failures: FailureItem[] = parsed.failures;
 
     if (failures.length === 0) {
-      return res.status(400).json({ success: false, error: 'IA nÃ£o extraiu falhas do PDF.' });
+      return res.status(400).json({
+        success: false,
+        error: 'A IA não encontrou falhas no conteúdo fornecido.',
+      });
     }
 
-    return res.status(200).json({ success: true, failures });
-  } catch (error: any) {
-    console.error('Erro no extract-failures:', error);
-    return res.status(500).json({ success: false, error: error?.message ?? 'Erro interno' });
+    console.log(`[extract-failures] ${failures.length} falhas extraídas com sucesso`);
+
+    // ── 7. Retorna para o frontend salvar ───────────────────────
+    // NOTA: O save no banco deve ocorrer aqui no backend para garantir atomicidade.
+    // Se o seu frontend faz o save separadamente, considere mover a inserção para cá
+    // passando também o failure_manual_id nesta requisição.
+    return res.status(200).json({
+      success: true,
+      failures,
+      meta: {
+        totalFailures: failures.length,
+        pdfChars: cleanText.length,
+        truncated: cleanText.length > MAX_TEXT_CHARS,
+        withImage: !!photoUrl,
+      },
+    });
+
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Erro interno desconhecido';
+    console.error('[extract-failures] Erro crítico:', message);
+    return res.status(500).json({ success: false, error: message });
   }
 }
-
-
-
-
