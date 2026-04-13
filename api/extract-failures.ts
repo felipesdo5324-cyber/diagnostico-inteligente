@@ -24,8 +24,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { filePath, photoUrl, equipamento, marca, modelo, categoria } = req.body as {
+    const { filePath, fileUrl, photoUrl, equipamento, marca, modelo, categoria } = req.body as {
       filePath: string;
+      fileUrl?: string;
       photoUrl?: string;
       equipamento: string;
       marca?: string;

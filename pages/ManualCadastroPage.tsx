@@ -14,6 +14,7 @@ interface FailureManual {
   falha: string;
   resolucao: string;
   attachment_url?: string;
+  file_url?: string;
   created_at: string;
 }
 
@@ -82,7 +83,7 @@ export default function ManualCadastroPage() {
 
     setUploading(true);
     try {
-      const { file_path } = await dataService.uploadFile(fileSelected);
+      const { file_path, file_url } = await dataService.uploadFile(fileSelected);
       let photoUrl: string | undefined;
       if (photoFile) {
         const photoUpload = await dataService.uploadFile(photoFile);
@@ -94,7 +95,7 @@ export default function ManualCadastroPage() {
       const response = await fetch('/api/extract-failures', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: file_path, photoUrl, equipamento, marca, modelo, categoria }),
+        body: JSON.stringify({ filePath: file_path, fileUrl: file_url, photoUrl, equipamento, marca, modelo, categoria }),
       });
 
       if (!response.ok) {
@@ -103,15 +104,16 @@ export default function ManualCadastroPage() {
       }
 
       const result = await response.json();
-      const extracted = result.failures as Array<{ titulo: string; falha: string; resolucao: string }>;
+      const extracted = result.failures as Array<{ titulo?: string; falha: string; resolucao: string; message?: string }>;
 
       if (!extracted || extracted.length === 0) {
         throw new Error('Nenhuma falha foi extraída do PDF');
       }
 
       for (const failure of extracted) {
+        const savedTitle = failure.message?.trim() ? failure.message : failure.titulo ?? 'Falha extraída';
         await dataService.saveFailureManual({
-          titulo: `${equipamento} - ${failure.titulo}`,
+          titulo: `${equipamento} - ${savedTitle}`,
           categoria,
           equipamento,
           marca,
@@ -119,6 +121,7 @@ export default function ManualCadastroPage() {
           falha: failure.falha,
           resolucao: failure.resolucao,
           attachment_url: photoUrl,
+          fileUrl: file_url,
         });
       }
 
@@ -319,6 +322,11 @@ export default function ManualCadastroPage() {
                       <p className="text-sm text-slate-600 mb-2"><strong>Modelo:</strong> {manual.modelo}</p>
                       <p className="text-sm text-slate-700 mb-2"><strong>Falha:</strong> {manual.falha}</p>
                       <p className="text-sm text-slate-700 mb-2"><strong>Resolução:</strong> {manual.resolucao}</p>
+                      {manual.file_url && (
+                        <a href={manual.file_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm block mb-1">
+                          Ver PDF do manual
+                        </a>
+                      )}
                       {manual.attachment_url && (
                         <a href={manual.attachment_url} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-sm">
                           Ver foto do alarme

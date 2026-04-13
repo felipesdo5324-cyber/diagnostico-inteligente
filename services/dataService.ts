@@ -234,10 +234,22 @@ export const dataService = {
     falha: string;
     resolucao: string;
     attachment_url?: string | null;
+    fileUrl?: string | null;
   }): Promise<void> => {
     const sb = getSupabase();
     if (!sb) throw new Error("Configuração do Supabase ausente.");
-    const { error } = await sb.from('failure_manuals').insert([data]);
+    const insertRow = {
+      titulo: data.titulo,
+      categoria: data.categoria,
+      equipamento: data.equipamento,
+      marca: data.marca,
+      modelo: data.modelo,
+      falha: data.falha,
+      resolucao: data.resolucao,
+      attachment_url: data.attachment_url ?? null,
+      file_url: data.fileUrl ?? null,
+    };
+    const { error } = await sb.from('failure_manuals').insert([insertRow]);
     if (error) throw error;
   },
 
