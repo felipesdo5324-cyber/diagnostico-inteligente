@@ -10,7 +10,7 @@ import { dataService } from '../services/dataService';
 import { DiagnosticResult } from '../types';
 import { Card, CardContent, CardHeader, Button, Input, Label, Textarea, Badge } from '../components/UI';
 import { toast } from 'sonner';
-
+import { normalizeEquipmentInput } from '../utils/normalizeEquipment';
 export default function DiagnosticPage() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,7 +47,12 @@ export default function DiagnosticPage() {
   };
 
   const handleAnalyze = async () => {
-    if (!formData.equipment_name || (!formData.defect_description && !selectedImage)) {
+    const normalized = normalizeEquipmentInput({
+  equipment: normalized.equipment,
+  brand: normalized.brand,
+  model: normalized.model,
+});
+    if (!normalized.equipment || (!formData.defect_description && !selectedImage)) {
       toast.error('Identifique o equipamento e descreva o problema.');
       return;
     }
@@ -81,11 +86,11 @@ export default function DiagnosticPage() {
 
       // ── 2. Se não achou por código, busca por equipamento/modelo ──────────
       if (!failureManualContext) {
-        const falhasPorEquip = await dataService.findFailuresByEquipment(
-          formData.equipment_name,
-          formData.brand,
-          formData.model
-        );
+        const falhas = await dataService.findFailuresByEquipment(
+       normalized.equipment,
+       normalized.brand,
+       normalized.model
+);
         if (falhasPorEquip.length > 0) {
           console.log(`[Diagnóstico] ${falhasPorEquip.length} falha(s) encontrada(s) por equipamento`);
           failureManualContext = falhas
@@ -152,18 +157,18 @@ finalContext = finalContext.slice(0, MAX_CONTEXT);
 
       // ── 6. Chama a IA com todo o contexto ─────────────────────────────────
       const result = await aiService.analyzeEquipment(
-        {
-          name: formData.equipment_name,
-          brand: formData.brand,
-          model: formData.model,
-          defect: formData.defect_description,
-          category: formData.defect_category,
-        },
-        finalContext || manual?.description || null,
-        fieldTips || null,
-        base64Image,
-        manual?.id || null
-      );
+  {
+    name: normalized.equipment,
+    brand: normalized.brand,
+    model: normalized.model,
+    defect: formData.defect_description,
+    category: formData.defect_category,
+  },
+  finalContext,
+  fieldTips || null,
+  base64Image,
+  null
+);
 
       setDiagnosisResult(result);
       toast.success('Análise técnica concluída!');
