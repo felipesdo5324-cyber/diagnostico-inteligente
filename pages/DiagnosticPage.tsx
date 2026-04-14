@@ -88,12 +88,16 @@ export default function DiagnosticPage() {
         );
         if (falhasPorEquip.length > 0) {
           console.log(`[Diagnóstico] ${falhasPorEquip.length} falha(s) encontrada(s) por equipamento`);
-          failureManualContext = falhasPorEquip
-            .map(
-              (f) =>
-                `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || f.falha || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || f.resolucao || ''}`
-            )
-            .join('\n\n---\n\n');
+          failureManualContext = falhas
+  .slice(0, 3) // 🔥 ESSENCIAL
+  .map(
+    (f) =>
+      `CÓDIGO: ${f.codigo || 'N/A'}
+DESCRIÇÃO: ${f.descricao || f.falha || ''}
+CAUSA PROVÁVEL: ${f.causa_provavel || ''}
+AÇÃO TÉCNICA: ${f.acao_tecnica || f.resolucao || ''}`
+  )
+  .join('\n\n');
         }
       }
 
@@ -107,16 +111,18 @@ export default function DiagnosticPage() {
           manualContent = await dataService.getManualSections(manual.id);
         }
       }
+      // 🔥 PRIORIDADE TOTAL: failure_manuals
+let finalContext = '';
 
-      // Combina contextos: failure_manuals tem prioridade
-      const combinedContext = [
-        failureManualContext
-          ? `=== MANUAL DE FALHAS CADASTRADO ===\n${failureManualContext}`
-          : '',
-        manualContent ? `=== MANUAL TÉCNICO ===\n${manualContent}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n\n');
+if (failureManualContext) {
+  finalContext = `=== MANUAL DE FALHAS ===\n${failureManualContext}`;
+} else if (manualContent) {
+  finalContext = `=== MANUAL TÉCNICO ===\n${manualContent}`;
+}
+
+// 🔥 LIMITE DE CONTEXTO (evita corte silencioso)
+const MAX_CONTEXT = 12000;
+finalContext = finalContext.slice(0, MAX_CONTEXT);
 
       console.log('[Diagnóstico] Contexto failure_manuals:', failureManualContext.length, 'chars');
       console.log('[Diagnóstico] Contexto manual técnico:', manualContent?.length ?? 0, 'chars');
@@ -153,7 +159,7 @@ export default function DiagnosticPage() {
           defect: formData.defect_description,
           category: formData.defect_category,
         },
-        combinedContext || manual?.description || null,
+        finalContext || manual?.description || null,
         fieldTips || null,
         base64Image,
         manual?.id || null
