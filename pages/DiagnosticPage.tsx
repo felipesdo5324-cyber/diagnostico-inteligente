@@ -102,36 +102,34 @@ export default function DiagnosticPage() {
         );
 
         // Tentativa 2: aliases do modelo (ex: "4510" → "DSE4510", "DSE 4510")
-        if (falhasPorEquip.length === 0 && normalized.modelAliases.length > 0) {
-          for (const alias of normalized.modelAliases) {
-            falhasPorEquip = await dataService.findFailuresByEquipment(
-              normalized.equipment,
-              normalized.brand,
-              alias
-            );
-            if (falhasPorEquip.length > 0) break;
-          }
-        }
+        let falhasPorEquip = await dataService.findFailuresByEquipment(
+      normalized.equipment,
+      normalized.brand,
+      normalized.model
+        ) || [];
 
-        // Tentativa 3: só pela marca (mais abrangente)
-        if (falhasPorEquip.length === 0 && normalized.brand) {
-          for (const brandAlias of normalized.brandAliases) {
-            falhasPorEquip = await dataService.findFailuresByEquipment('', brandAlias, '');
-            if (falhasPorEquip.length > 0) break;
-          }
-        }
+       if (falhasPorEquip.length === 0 && Array.isArray(normalized.modelAliases)) {
+     for (const alias of normalized.modelAliases) {
+     falhasPorEquip = await dataService.findFailuresByEquipment(
+      normalized.equipment,
+      normalized.brand,
+      alias
+    ) || [];
 
-        if (falhasPorEquip.length > 0) {
-          console.log(`[Diagnóstico] ${falhasPorEquip.length} falha(s) encontrada(s) por equipamento`);
-          failureManualContext = falhasPorEquip
-            .slice(0, 5)
-            .map(
-              (f) =>
-                `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || f.falha || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || f.resolucao || ''}`
-            )
-            .join('\n\n---\n\n');
-        }
-      }
+    if (falhasPorEquip.length > 0) break;
+  }
+}
+
+if (falhasPorEquip.length === 0 && Array.isArray(normalized.brandAliases)) {
+  for (const brandAlias of normalized.brandAliases) {
+    falhasPorEquip = await dataService.findFailuresByEquipment('', brandAlias, '') || [];
+
+    if (falhasPorEquip.length > 0) break;
+  }
+}
+
+if (falhasPorEquip.length > 0)
+
 
       // ── 4. BUSCA COMPLEMENTAR NO MANUAL TÉCNICO (RAG) ─────────────────────
       let manual = await dataService.findManualByName(normalized.equipment, normalized.model);
