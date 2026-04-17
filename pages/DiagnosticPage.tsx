@@ -11,6 +11,7 @@ import { DiagnosticResult } from '../types';
 import { Card, CardContent, CardHeader, Button, Input, Label, Textarea, Badge } from '../components/UI';
 import { toast } from 'sonner';
 import { normalizeEquipmentInput } from '../utils/normalizeEquipment';
+
 export default function DiagnosticPage() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,12 +48,7 @@ export default function DiagnosticPage() {
   };
 
   const handleAnalyze = async () => {
-    const normalized = normalizeEquipmentInput({
-  equipment: normalized.equipment,
-  brand: normalized.brand,
-  model: normalized.model,
-});
-    if (!normalized.equipment || (!formData.defect_description && !selectedImage)) {
+    if (!formData.equipment_name || (!formData.defect_description && !selectedImage)) {
       toast.error('Identifique o equipamento e descreva o problema.');
       return;
     }
@@ -62,7 +58,18 @@ export default function DiagnosticPage() {
     setDiagnosisResult(null);
 
     try {
-      // ── 1. Extrai códigos do relato e busca no failure_manuals ─────────────
+      // ── 1. NORMALIZAÇÃO ────────────────────────────────────────────────────
+      // Padroniza o que o técnico digitou, independente de maiúsculas/minúsculas
+      // ou variações de escrita. Ex: "GERADOR CUMMINS" → "Gerador" + "Cummins"
+      const normalized = normalizeEquipmentInput({
+        equipment: formData.equipment_name,
+        brand: formData.brand,
+        model: formData.model,
+      });
+
+      console.log('[Diagnóstico] Normalizado:', normalized);
+
+      // ── 2. BUSCA POR CÓDIGO NO FAILURE_MANUALS ─────────────────────────────
       let failureManualContext = '';
 
       const codigosEncontrados = dataService.extractCodesFromText(formData.defect_description);
@@ -72,8 +79,9 @@ export default function DiagnosticPage() {
         for (const codigo of codigosEncontrados) {
           const falhas = await dataService.findFailureByCode(codigo);
           if (falhas.length > 0) {
-            console.log(`[Diagnóstico] ${falhas.length} falha(s) encontrada(s) para código ${codigo}`);
+            console.log(`[Diagnóstico] ${falhas.length} falha(s) para código ${codigo}`);
             failureManualContext = falhas
+              .slice(0, 3)
               .map(
                 (f) =>
                   `CÓDIGO: ${f.codigo}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}\nEQUIPAMENTO: ${f.equipamento} ${f.marca} ${f.modelo}`
@@ -84,67 +92,100 @@ export default function DiagnosticPage() {
         }
       }
 
-      // ── 2. Se não achou por código, busca por equipamento/modelo ──────────
+      // ── 3. BUSCA POR EQUIPAMENTO (com aliases normalizados) ────────────────
       if (!failureManualContext) {
-        const falhas = await dataService.findFailuresByEquipment(
-       normalized.equipment,
-       normalized.brand,
-       normalized.model
-);
+        // Tentativa 1: valores normalizados diretos
+        let falhasPorEquip = await dataService.findFailuresByEquipment(
+          normalized.equipment,
+          normalized.brand,
+          normalized.model
+        );
+
+        // Tentativa 2: aliases do modelo (ex: "4510" → "DSE4510", "DSE 4510")
+        if (falhasPorEquip.length === 0 && normalized.modelAliases.length > 0) {
+          for (const alias of normalized.modelAliases) {
+            falhasPorEquip = await dataService.findFailuresByEquipment(
+              normalized.equipment,
+              normalized.brand,
+              alias
+            );
+            if (falhasPorEquip.length > 0) break;
+          }
+        }
+
+        // Tentativa 3: só pela marca (mais abrangente)
+        if (falhasPorEquip.length === 0 && normalized.brand) {
+          for (const brandAlias of normalized.brandAliases) {
+            falhasPorEquip = await dataService.findFailuresByEquipment('', brandAlias, '');
+            if (falhasPorEquip.length > 0) break;
+          }
+        }
+
         if (falhasPorEquip.length > 0) {
           console.log(`[Diagnóstico] ${falhasPorEquip.length} falha(s) encontrada(s) por equipamento`);
-          failureManualContext = falhas
-  .slice(0, 3) // 🔥 ESSENCIAL
-  .map(
-    (f) =>
-      `CÓDIGO: ${f.codigo || 'N/A'}
-DESCRIÇÃO: ${f.descricao || f.falha || ''}
-CAUSA PROVÁVEL: ${f.causa_provavel || ''}
-AÇÃO TÉCNICA: ${f.acao_tecnica || f.resolucao || ''}`
-  )
-  .join('\n\n');
+          failureManualContext = falhasPorEquip
+            .slice(0, 5)
+            .map(
+              (f) =>
+                `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || f.falha || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || f.resolucao || ''}`
+            )
+            .join('\n\n---\n\n');
         }
       }
 
-      // ── 3. Busca complementar no manual técnico (RAG) ─────────────────────
-      const manual = await dataService.findManualByName(formData.equipment_name, formData.model);
+      // ── 4. BUSCA COMPLEMENTAR NO MANUAL TÉCNICO (RAG) ─────────────────────
+      let manual = await dataService.findManualByName(normalized.equipment, normalized.model);
+
+      if (!manual) {
+        for (const alias of normalized.modelAliases) {
+          manual = await dataService.findManualByName(normalized.equipment, alias);
+          if (manual) break;
+        }
+      }
+
       let manualContent: string | null = null;
       if (manual?.id) {
-        const query = `${formData.defect_description} ${formData.defect_category} ${formData.equipment_name}`;
-        manualContent = await dataService.semanticSearchManual(query, manual.id, 20);
+        const query = `${formData.defect_description} ${formData.defect_category} ${normalized.equipment} ${normalized.brand}`;
+        manualContent = await dataService.semanticSearchManual(query, manual.id, 10);
         if (!manualContent) {
           manualContent = await dataService.getManualSections(manual.id);
         }
       }
-      // 🔥 PRIORIDADE TOTAL: failure_manuals
-let finalContext = '';
 
-if (failureManualContext) {
-  finalContext = `=== MANUAL DE FALHAS ===\n${failureManualContext}`;
-} else if (manualContent) {
-  finalContext = `=== MANUAL TÉCNICO ===\n${manualContent}`;
-}
+      // ── 5. MONTA CONTEXTO FINAL ────────────────────────────────────────────
+      let finalContext = '';
 
-// 🔥 LIMITE DE CONTEXTO (evita corte silencioso)
-const MAX_CONTEXT = 12000;
-finalContext = finalContext.slice(0, MAX_CONTEXT);
+      if (failureManualContext) {
+        finalContext = `=== MANUAL DE FALHAS CADASTRADO ===\n${failureManualContext}`;
+      }
 
-      console.log('[Diagnóstico] Contexto failure_manuals:', failureManualContext.length, 'chars');
-      console.log('[Diagnóstico] Contexto manual técnico:', manualContent?.length ?? 0, 'chars');
+      if (manualContent) {
+        finalContext += `${finalContext ? '\n\n' : ''}=== MANUAL TÉCNICO ===\n${manualContent}`;
+      }
 
-      // ── 4. Histórico de campo ─────────────────────────────────────────────
+      const MAX_CONTEXT = 12000;
+      if (finalContext.length > MAX_CONTEXT) {
+        finalContext = finalContext.slice(0, MAX_CONTEXT);
+        console.warn('[Diagnóstico] Contexto truncado para', MAX_CONTEXT, 'chars');
+      }
+
+      console.log('[Diagnóstico] failure_manuals:', failureManualContext.length, 'chars');
+      console.log('[Diagnóstico] manual técnico:', manualContent?.length ?? 0, 'chars');
+      console.log('[Diagnóstico] contexto final:', finalContext.length, 'chars');
+
+      // ── 6. HISTÓRICO DE CAMPO ──────────────────────────────────────────────
       const allLogs = await dataService.getLogs();
       const fieldTips = allLogs
         .filter(
           (l) =>
-            l.equipment_model === formData.model ||
+            l.equipment_model === normalized.model ||
             l.defect_category === formData.defect_category
         )
         .slice(0, 3)
-        .map((l) => `Experiência: ${l.defect_description} -> Solução: ${l.technician_notes}`)
+        .map((l) => `Experiência: ${l.defect_description} -> ${l.technician_notes}`)
         .join('\n');
 
-      // ── 5. Imagem ─────────────────────────────────────────────────────────
+      // ── 7. IMAGEM ──────────────────────────────────────────────────────────
       let base64Image = null;
       if (selectedImage) {
         base64Image = await new Promise<string>((resolve) => {
@@ -155,23 +196,24 @@ finalContext = finalContext.slice(0, MAX_CONTEXT);
         });
       }
 
-      // ── 6. Chama a IA com todo o contexto ─────────────────────────────────
+      // ── 8. CHAMA A IA ──────────────────────────────────────────────────────
       const result = await aiService.analyzeEquipment(
-  {
-    name: normalized.equipment,
-    brand: normalized.brand,
-    model: normalized.model,
-    defect: formData.defect_description,
-    category: formData.defect_category,
-  },
-  finalContext,
-  fieldTips || null,
-  base64Image,
-  null
-);
+        {
+          name: normalized.equipment,
+          brand: normalized.brand,
+          model: normalized.model,
+          defect: formData.defect_description,
+          category: formData.defect_category,
+        },
+        finalContext || manual?.description || null,
+        fieldTips || null,
+        base64Image,
+        manual?.id || null
+      );
 
       setDiagnosisResult(result);
       toast.success('Análise técnica concluída!');
+
     } catch (error: any) {
       console.error(error);
       setErrorStatus(error.message || 'Erro na análise.');
