@@ -99,37 +99,40 @@ export default function DiagnosticPage() {
           normalized.equipment,
           normalized.brand,
           normalized.model
-        );
-
-        // Tentativa 2: aliases do modelo (ex: "4510" → "DSE4510", "DSE 4510")
-        let falhasPorEquip = await dataService.findFailuresByEquipment(
-      normalized.equipment,
-      normalized.brand,
-      normalized.model
         ) || [];
 
-       if (falhasPorEquip.length === 0 && Array.isArray(normalized.modelAliases)) {
-     for (const alias of normalized.modelAliases) {
-     falhasPorEquip = await dataService.findFailuresByEquipment(
-      normalized.equipment,
-      normalized.brand,
-      alias
-    ) || [];
+        // Tentativa 2: aliases do modelo (ex: "4510" → "DSE4510", "DSE 4510")
+        if (falhasPorEquip.length === 0 && Array.isArray(normalized.modelAliases)) {
+          for (const alias of normalized.modelAliases) {
+            falhasPorEquip = await dataService.findFailuresByEquipment(
+              normalized.equipment,
+              normalized.brand,
+              alias
+            ) || [];
 
-    if (falhasPorEquip.length > 0) break;
-  }
-}
+            if (falhasPorEquip.length > 0) break;
+          }
+        }
 
-if (falhasPorEquip.length === 0 && Array.isArray(normalized.brandAliases)) {
-  for (const brandAlias of normalized.brandAliases) {
-    falhasPorEquip = await dataService.findFailuresByEquipment('', brandAlias, '') || [];
+        // Tentativa 3: aliases da marca
+        if (falhasPorEquip.length === 0 && Array.isArray(normalized.brandAliases)) {
+          for (const brandAlias of normalized.brandAliases) {
+            falhasPorEquip = await dataService.findFailuresByEquipment('', brandAlias, '') || [];
 
-    if (falhasPorEquip.length > 0) break;
-  }
-}
+            if (falhasPorEquip.length > 0) break;
+          }
+        }
 
-if (falhasPorEquip.length > 0)
-
+        if (falhasPorEquip.length > 0) {
+          failureManualContext = falhasPorEquip
+            .slice(0, 3)
+            .map(
+              (f: any) =>
+                `CÓDIGO: ${f.codigo}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}\nEQUIPAMENTO: ${f.equipamento} ${f.marca} ${f.modelo}`
+            )
+            .join('\n\n---\n\n');
+        }
+      }
 
       // ── 4. BUSCA COMPLEMENTAR NO MANUAL TÉCNICO (RAG) ─────────────────────
       let manual = await dataService.findManualByName(normalized.equipment, normalized.model);
