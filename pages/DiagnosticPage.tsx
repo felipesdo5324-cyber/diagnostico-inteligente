@@ -10,7 +10,7 @@ import { dataService } from '../services/dataService';
 import { DiagnosticResult } from '../types';
 import { Card, CardContent, CardHeader, Button, Input, Label, Textarea, Badge } from '../components/UI';
 import { toast } from 'sonner';
-import { normalizeEquipmentInput } from '../utils/normalizeEquipment';
+import { normalizeEquipmentInput } from '../src/utils/normalizeEquipment';
 
 export default function DiagnosticPage() {
   const navigate = useNavigate();
