@@ -10,7 +10,28 @@ import { dataService } from '../services/dataService';
 import { DiagnosticResult } from '../types';
 import { Card, CardContent, CardHeader, Button, Input, Label, Textarea, Badge } from '../components/UI';
 import { toast } from 'sonner';
-import { normalizeEquipmentInput } from '../src/utils/normalizeEquipment';
+import { normalizeEquipmentInput } from '../utils/normalizeEquipment';
+
+// ── TRIAGEM: chamada APENAS quando semântica não encontrar ─────────────────────
+async function runTriage(relato: string, equipamento: string, marca: string, modelo: string) {
+  const fallback = { codigos: [], sintomasIdentificados: [], termosNormalizados: { equipamento, marca, modelo } };
+  if (!relato.trim()) return fallback;
+  try {
+    const r = await fetch('/api/triage-failures', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relato, equipamento, marca, modelo }),
+    });
+    if (!r.ok) return fallback;
+    const d = await r.json();
+    if (!d.success) return fallback;
+    return {
+      codigos:              d.codigos              || [],
+      sintomasIdentificados: d.sintomasIdentificados || [],
+      termosNormalizados:   d.termosNormalizados   || fallback.termosNormalizados,
+    };
+  } catch { return fallback; }
+}
 
 export default function DiagnosticPage() {
   const navigate = useNavigate();
@@ -28,6 +49,7 @@ export default function DiagnosticPage() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [analyzeStep, setAnalyzeStep] = useState<'idle' | 'buscando' | 'triagem' | 'analisando'>('idle');
 
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosticResult | null>(null);
   const [errorStatus, setErrorStatus] = useState<string | null>(null);
@@ -41,10 +63,7 @@ export default function DiagnosticPage() {
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setSelectedImage(file);
-      setImagePreview(URL.createObjectURL(file));
-    }
+    if (file) { setSelectedImage(file); setImagePreview(URL.createObjectURL(file)); }
   };
 
   const handleAnalyze = async () => {
@@ -54,89 +73,139 @@ export default function DiagnosticPage() {
     }
 
     setIsAnalyzing(true);
+    setAnalyzeStep('buscando');
     setErrorStatus(null);
     setDiagnosisResult(null);
 
     try {
-      // ── 1. NORMALIZAÇÃO ────────────────────────────────────────────────────
-      // Padroniza o que o técnico digitou, independente de maiúsculas/minúsculas
-      // ou variações de escrita. Ex: "GERADOR CUMMINS" → "Gerador" + "Cummins"
+      // ── 1. NORMALIZAÇÃO ───────────────────────────────────────────────────
       const normalized = normalizeEquipmentInput({
         equipment: formData.equipment_name,
-        brand: formData.brand,
-        model: formData.model,
+        brand:     formData.brand,
+        model:     formData.model,
       });
-
       console.log('[Diagnóstico] Normalizado:', normalized);
 
-      // ── 2. BUSCA POR CÓDIGO NO FAILURE_MANUALS ─────────────────────────────
       let failureManualContext = '';
+      let usouTriagem = false;
 
-      const codigosEncontrados = dataService.extractCodesFromText(formData.defect_description);
-      console.log('[Diagnóstico] Códigos encontrados no relato:', codigosEncontrados);
+      // ── 2. ETAPA 1: CÓDIGO EXPLÍCITO (instantâneo) ────────────────────────
+      const codigosExplicitos = dataService.extractCodesFromText(formData.defect_description);
+      console.log('[Diagnóstico] Códigos explícitos:', codigosExplicitos);
 
-      if (codigosEncontrados.length > 0) {
-        for (const codigo of codigosEncontrados) {
+      if (codigosExplicitos.length > 0) {
+        for (const codigo of codigosExplicitos) {
           const falhas = await dataService.findFailureByCode(codigo);
           if (falhas.length > 0) {
-            console.log(`[Diagnóstico] ${falhas.length} falha(s) para código ${codigo}`);
-            failureManualContext = falhas
-              .slice(0, 3)
-              .map(
-                (f) =>
-                  `CÓDIGO: ${f.codigo}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}\nEQUIPAMENTO: ${f.equipamento} ${f.marca} ${f.modelo}`
-              )
+            console.log(`[Diagnóstico] ✅ Código exato "${codigo}": ${falhas.length} resultado(s)`);
+            failureManualContext = falhas.slice(0, 3)
+              .map((f) => `CÓDIGO: ${f.codigo}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}`)
               .join('\n\n---\n\n');
             break;
           }
         }
       }
 
-      // ── 3. BUSCA POR EQUIPAMENTO (com aliases normalizados) ────────────────
+      // ── 3. ETAPA 2: SEMÂNTICA (threshold 0.65) ────────────────────────────
+      if (!failureManualContext && formData.defect_description.trim()) {
+        console.log('[Diagnóstico] Tentando busca semântica...');
+
+        const resultadosSemanticos = await dataService.findFailuresBySimilarity(
+          formData.defect_description,
+          0.65,
+          normalized.brand,
+          normalized.model
+        );
+
+        if (resultadosSemanticos.length > 0) {
+          const top = resultadosSemanticos[0];
+          console.log(`[Diagnóstico] ✅ Semântica: ${resultadosSemanticos.length} resultado(s), top: ${(top.similaridade * 100).toFixed(0)}%`);
+          failureManualContext = resultadosSemanticos.slice(0, 5)
+            .map((f) => `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}\nSIMILARIDADE: ${(f.similaridade * 100).toFixed(0)}%`)
+            .join('\n\n---\n\n');
+        }
+      }
+
+      // ── 4. ETAPA 3: TRIAGE IA (fallback quando semântica < 0.65) ─────────
       if (!failureManualContext) {
-        // Tentativa 1: valores normalizados diretos
-        let falhasPorEquip = await dataService.findFailuresByEquipment(
+        setAnalyzeStep('triagem');
+        console.log('[Diagnóstico] Semântica insuficiente → Triagem IA...');
+        usouTriagem = true;
+
+        const triage = await runTriage(
+          formData.defect_description,
           normalized.equipment,
           normalized.brand,
           normalized.model
-        ) || [];
+        );
 
-        // Tentativa 2: aliases do modelo (ex: "4510" → "DSE4510", "DSE 4510")
-        if (falhasPorEquip.length === 0 && Array.isArray(normalized.modelAliases)) {
-          for (const alias of normalized.modelAliases) {
-            falhasPorEquip = await dataService.findFailuresByEquipment(
-              normalized.equipment,
-              normalized.brand,
-              alias
-            ) || [];
+        console.log('[Diagnóstico] Triagem:', triage);
 
-            if (falhasPorEquip.length > 0) break;
+        // Atualiza termos com o que a IA normalizou
+        if (triage.termosNormalizados.modelo) normalized.model = triage.termosNormalizados.modelo;
+        if (triage.termosNormalizados.marca)  normalized.brand = triage.termosNormalizados.marca;
+
+        // Busca pelos códigos que a triage identificou
+        const todosCodigos = [...new Set([...triage.codigos, ...codigosExplicitos])];
+
+        for (const codigo of todosCodigos) {
+          const falhas = await dataService.findFailureByCode(codigo);
+          if (falhas.length > 0) {
+            console.log(`[Diagnóstico] ✅ Triage + código "${codigo}": ${falhas.length} resultado(s)`);
+            failureManualContext = falhas.slice(0, 3)
+              .map((f) => `CÓDIGO: ${f.codigo}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}`)
+              .join('\n\n---\n\n');
+            break;
           }
         }
 
-        // Tentativa 3: aliases da marca
-        if (falhasPorEquip.length === 0 && Array.isArray(normalized.brandAliases)) {
-          for (const brandAlias of normalized.brandAliases) {
-            falhasPorEquip = await dataService.findFailuresByEquipment('', brandAlias, '') || [];
+        // Se triage identificou sintomas mas não achou código, usa sintomas como contexto
+        if (!failureManualContext && triage.sintomasIdentificados.length > 0) {
+          // Tenta semântica novamente com os sintomas normalizados pela triage
+          const sintomasStr = triage.sintomasIdentificados.join('. ');
+          const resultadosSemanticos2 = await dataService.findFailuresBySimilarity(
+            sintomasStr, 0.60, normalized.brand, normalized.model
+          );
 
+          if (resultadosSemanticos2.length > 0) {
+            console.log(`[Diagnóstico] ✅ Semântica pós-triage: ${resultadosSemanticos2.length} resultado(s)`);
+            failureManualContext = resultadosSemanticos2.slice(0, 5)
+              .map((f) => `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}`)
+              .join('\n\n---\n\n');
+          } else {
+            // Último recurso: sintomas como contexto direto para a IA principal
+            failureManualContext = `=== SINTOMAS IDENTIFICADOS PELA TRIAGEM ===\n${triage.sintomasIdentificados.map(s => `• ${s}`).join('\n')}`;
+          }
+        }
+      }
+
+      // ── 5. FALLBACK FINAL: busca por equipamento/modelo ───────────────────
+      if (!failureManualContext) {
+        console.log('[Diagnóstico] Fallback: busca por equipamento...');
+        let falhasPorEquip = await dataService.findFailuresByEquipment(normalized.equipment, normalized.brand, normalized.model);
+
+        if (falhasPorEquip.length === 0) {
+          for (const alias of normalized.modelAliases) {
+            falhasPorEquip = await dataService.findFailuresByEquipment(normalized.equipment, normalized.brand, alias);
+            if (falhasPorEquip.length > 0) break;
+          }
+        }
+        if (falhasPorEquip.length === 0) {
+          for (const alias of normalized.brandAliases) {
+            falhasPorEquip = await dataService.findFailuresByEquipment('', alias, '');
             if (falhasPorEquip.length > 0) break;
           }
         }
 
         if (falhasPorEquip.length > 0) {
-          failureManualContext = falhasPorEquip
-            .slice(0, 3)
-            .map(
-              (f: any) =>
-                `CÓDIGO: ${f.codigo}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}\nEQUIPAMENTO: ${f.equipamento} ${f.marca} ${f.modelo}`
-            )
+          failureManualContext = falhasPorEquip.slice(0, 5)
+            .map((f) => `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || f.falha || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || f.resolucao || ''}`)
             .join('\n\n---\n\n');
         }
       }
 
-      // ── 4. BUSCA COMPLEMENTAR NO MANUAL TÉCNICO (RAG) ─────────────────────
+      // ── 6. MANUAL TÉCNICO (RAG) ───────────────────────────────────────────
       let manual = await dataService.findManualByName(normalized.equipment, normalized.model);
-
       if (!manual) {
         for (const alias of normalized.modelAliases) {
           manual = await dataService.findManualByName(normalized.equipment, alias);
@@ -148,62 +217,64 @@ export default function DiagnosticPage() {
       if (manual?.id) {
         const query = `${formData.defect_description} ${formData.defect_category} ${normalized.equipment} ${normalized.brand}`;
         manualContent = await dataService.semanticSearchManual(query, manual.id, 10);
-        if (!manualContent) {
-          manualContent = await dataService.getManualSections(manual.id);
-        }
+        if (!manualContent) manualContent = await dataService.getManualSections(manual.id);
       }
 
-      // ── 5. MONTA CONTEXTO FINAL ────────────────────────────────────────────
-      let finalContext = '';
+      // ── 7. HISTÓRICO DE RESOLUÇÕES ALTERNATIVAS ───────────────────────────
+      // Casos onde o técnico resolveu diferente do que a IA sugeriu
+      // São os mais valiosos: conhecimento real de campo
+      const resolucoes = await dataService.getAlternativeResolutions(
+        normalized.model,
+        formData.defect_category,
+        formData.defect_description
+      );
 
-      if (failureManualContext) {
-        finalContext = `=== MANUAL DE FALHAS CADASTRADO ===\n${failureManualContext}`;
-      }
+      const fieldHistoryContext = resolucoes.length > 0
+        ? resolucoes.slice(0, 3)
+            .map((r) => `PROBLEMA: ${r.descricao}\nSOLUÇÃO REAL DE CAMPO: ${r.solucao}\nEQUIPAMENTO: ${r.equipamento} ${r.modelo}`)
+            .join('\n\n---\n\n')
+        : '';
 
-      if (manualContent) {
-        finalContext += `${finalContext ? '\n\n' : ''}=== MANUAL TÉCNICO ===\n${manualContent}`;
-      }
+      console.log(`[Diagnóstico] Resoluções alternativas: ${resolucoes.length}`);
 
-      const MAX_CONTEXT = 12000;
-      if (finalContext.length > MAX_CONTEXT) {
-        finalContext = finalContext.slice(0, MAX_CONTEXT);
-        console.warn('[Diagnóstico] Contexto truncado para', MAX_CONTEXT, 'chars');
-      }
+      // ── 8. MONTA CONTEXTO FINAL ───────────────────────────────────────────
+      const contextParts: string[] = [];
 
-      console.log('[Diagnóstico] failure_manuals:', failureManualContext.length, 'chars');
-      console.log('[Diagnóstico] manual técnico:', manualContent?.length ?? 0, 'chars');
-      console.log('[Diagnóstico] contexto final:', finalContext.length, 'chars');
+      if (failureManualContext)  contextParts.push(`=== MANUAL DE FALHAS ===\n${failureManualContext}`);
+      if (manualContent)         contextParts.push(`=== MANUAL TÉCNICO ===\n${manualContent}`);
+      if (fieldHistoryContext)   contextParts.push(`=== EXPERIÊNCIAS REAIS DE CAMPO (prioridade alta) ===\n${fieldHistoryContext}`);
 
-      // ── 6. HISTÓRICO DE CAMPO ──────────────────────────────────────────────
+      let finalContext = contextParts.join('\n\n');
+      if (finalContext.length > 12000) finalContext = finalContext.slice(0, 12000);
+
+      console.log('[Diagnóstico] Contexto final:', finalContext.length, 'chars | Usou triage:', usouTriagem);
+
+      // ── 9. HISTÓRICO PADRÃO (logs recentes do mesmo modelo/categoria) ─────
+      setAnalyzeStep('analisando');
       const allLogs = await dataService.getLogs();
       const fieldTips = allLogs
-        .filter(
-          (l) =>
-            l.equipment_model === normalized.model ||
-            l.defect_category === formData.defect_category
-        )
+        .filter((l) => l.equipment_model === normalized.model || l.defect_category === formData.defect_category)
         .slice(0, 3)
         .map((l) => `Experiência: ${l.defect_description} -> ${l.technician_notes}`)
         .join('\n');
 
-      // ── 7. IMAGEM ──────────────────────────────────────────────────────────
+      // ── 10. IMAGEM ────────────────────────────────────────────────────────
       let base64Image = null;
       if (selectedImage) {
         base64Image = await new Promise<string>((resolve) => {
           const reader = new FileReader();
-          reader.onload = (e) =>
-            resolve((e.target?.result as string).split(',')[1]);
+          reader.onload = (e) => resolve((e.target?.result as string).split(',')[1]);
           reader.readAsDataURL(selectedImage);
         });
       }
 
-      // ── 8. CHAMA A IA ──────────────────────────────────────────────────────
+      // ── 11. IA PRINCIPAL (gpt-4o) ─────────────────────────────────────────
       const result = await aiService.analyzeEquipment(
         {
-          name: normalized.equipment,
-          brand: normalized.brand,
-          model: normalized.model,
-          defect: formData.defect_description,
+          name:     normalized.equipment,
+          brand:    normalized.brand,
+          model:    normalized.model,
+          defect:   formData.defect_description,
           category: formData.defect_category,
         },
         finalContext || manual?.description || null,
@@ -221,6 +292,7 @@ export default function DiagnosticPage() {
       toast.error('Falha no motor de IA.');
     } finally {
       setIsAnalyzing(false);
+      setAnalyzeStep('idle');
     }
   };
 
@@ -229,20 +301,20 @@ export default function DiagnosticPage() {
     setIsSaving(true);
     try {
       await dataService.saveLog({
-        equipment_model: formData.model,
-        equipment_name: formData.equipment_name,
-        brand: formData.brand,
-        defect_category: formData.defect_category,
-        diagnosis: diagnosisResult!,
-        status: resolutionType !== 'salvar_depois' ? 'Resolvido' : 'Pendente',
-        resolution_type: resolutionType,
+        equipment_model:    formData.model,
+        equipment_name:     formData.equipment_name,
+        brand:              formData.brand,
+        defect_category:    formData.defect_category,
+        diagnosis:          diagnosisResult!,
+        status:             resolutionType !== 'salvar_depois' ? 'Resolvido' : 'Pendente',
+        resolution_type:    resolutionType,
         defect_description: formData.defect_description,
-        technician_notes: actualSolution,
-        attachment_notes: attachmentNotes,
+        technician_notes:   actualSolution,
+        attachment_notes:   attachmentNotes,
       });
       toast.success('Histórico salvo!');
       navigate('/historico');
-    } catch (error) {
+    } catch {
       toast.error('Erro ao salvar.');
     } finally {
       setIsSaving(false);
@@ -255,6 +327,14 @@ export default function DiagnosticPage() {
     return val.text || val.description || val.value || JSON.stringify(val);
   };
 
+  const stepMessages: Record<string, string> = {
+    buscando:   'Buscando no banco de falhas...',
+    triagem:    'Interpretando relato técnico...',
+    analisando: 'Gerando diagnóstico técnico...',
+  };
+
+  const stepOrder = ['buscando', 'triagem', 'analisando'];
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
       <div className="max-w-4xl mx-auto">
@@ -266,35 +346,22 @@ export default function DiagnosticPage() {
         <Card className="border-t-4 border-t-indigo-600 shadow-xl mb-8">
           <CardHeader className="bg-slate-50/50">
             <h2 className="flex items-center gap-3 text-indigo-900 text-xl font-black uppercase tracking-tight">
-              <ShieldCheck className="h-6 w-6 text-indigo-600" /> Diagnóstico com Inteligência
-              Artificial
+              <ShieldCheck className="h-6 w-6 text-indigo-600" /> Diagnóstico com Inteligência Artificial
             </h2>
           </CardHeader>
           <CardContent className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1">
                 <Label>Equipamento</Label>
-                <Input
-                  value={formData.equipment_name}
-                  onChange={(e) => setFormData({ ...formData, equipment_name: e.target.value })}
-                  placeholder="Ex: Gerador"
-                />
+                <Input value={formData.equipment_name} onChange={(e) => setFormData({ ...formData, equipment_name: e.target.value })} placeholder="Ex: Gerador" />
               </div>
               <div className="space-y-1">
                 <Label>Marca</Label>
-                <Input
-                  value={formData.brand}
-                  onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
-                  placeholder="Ex: Cummins"
-                />
+                <Input value={formData.brand} onChange={(e) => setFormData({ ...formData, brand: e.target.value })} placeholder="Ex: Cummins" />
               </div>
               <div className="space-y-1">
                 <Label>Modelo</Label>
-                <Input
-                  value={formData.model}
-                  onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-                  placeholder="Ex: PCC1302"
-                />
+                <Input value={formData.model} onChange={(e) => setFormData({ ...formData, model: e.target.value })} placeholder="Ex: PCC1302" />
               </div>
             </div>
 
@@ -304,19 +371,14 @@ export default function DiagnosticPage() {
                 {[
                   { id: 'eletrico', label: 'Elétrico', icon: <Zap className="w-4 h-4" /> },
                   { id: 'mecanico', label: 'Mecânico', icon: <Wrench className="w-4 h-4" /> },
-                  { id: 'ambos', label: 'Ambos', icon: <Layers className="w-4 h-4" /> },
+                  { id: 'ambos',    label: 'Ambos',    icon: <Layers className="w-4 h-4" /> },
                 ].map((cat) => (
-                  <button
-                    key={cat.id}
-                    onClick={() =>
-                      setFormData({ ...formData, defect_category: cat.id as any })
-                    }
+                  <button key={cat.id} onClick={() => setFormData({ ...formData, defect_category: cat.id as any })}
                     className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all font-bold ${
                       formData.defect_category === cat.id
                         ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg'
                         : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-300'
-                    }`}
-                  >
+                    }`}>
                     {cat.icon} {cat.label}
                   </button>
                 ))}
@@ -328,39 +390,21 @@ export default function DiagnosticPage() {
               <div className="relative">
                 <Textarea
                   value={formData.defect_description}
-                  onChange={(e) =>
-                    setFormData({ ...formData, defect_description: e.target.value })
-                  }
-                  placeholder="Descreva o sintoma ou código de erro. Ex: falha 1434"
+                  onChange={(e) => setFormData({ ...formData, defect_description: e.target.value })}
+                  placeholder='Descreva com suas palavras. Ex: "a bba d água tava vazando e o painel apagou"'
                   className="min-h-[100px] pr-12"
                 />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="absolute bottom-3 right-3 p-2 bg-indigo-50 rounded-lg text-indigo-600 hover:bg-indigo-100 transition-colors"
-                >
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="absolute bottom-3 right-3 p-2 bg-indigo-50 rounded-lg text-indigo-600 hover:bg-indigo-100 transition-colors">
                   <Camera className="w-5 h-5" />
                 </button>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleImageSelect}
-                  className="hidden"
-                  accept="image/*"
-                />
+                <input type="file" ref={fileInputRef} onChange={handleImageSelect} className="hidden" accept="image/*" />
               </div>
               {imagePreview && (
                 <div className="mt-2 relative inline-block animate-in zoom-in-95">
-                  <img
-                    src={imagePreview}
-                    className="h-24 rounded-lg border-2 border-white shadow-md"
-                  />
-                  <button
-                    onClick={() => {
-                      setSelectedImage(null);
-                      setImagePreview(null);
-                    }}
-                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-transform active:scale-90"
-                  >
+                  <img src={imagePreview} className="h-24 rounded-lg border-2 border-white shadow-md" />
+                  <button onClick={() => { setSelectedImage(null); setImagePreview(null); }}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg hover:bg-red-600 transition-transform active:scale-90">
                     <X className="w-3 h-3" />
                   </button>
                 </div>
@@ -374,19 +418,31 @@ export default function DiagnosticPage() {
               </div>
             )}
 
-            <Button
-              onClick={handleAnalyze}
-              disabled={isAnalyzing}
-              className="w-full h-14 font-black uppercase text-lg bg-indigo-600 shadow-xl"
-            >
+            {/* Barra de progresso com 3 etapas */}
+            {isAnalyzing && analyzeStep !== 'idle' && (
+              <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-3">
+                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-indigo-700 mb-2">
+                    {stepMessages[analyzeStep]}
+                  </p>
+                  <div className="flex gap-1.5">
+                    {stepOrder.map((step, i) => (
+                      <div key={step} className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
+                        stepOrder.indexOf(analyzeStep) >= i ? 'bg-indigo-500' : 'bg-indigo-200'
+                      }`} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <Button onClick={handleAnalyze} disabled={isAnalyzing}
+              className="w-full h-14 font-black uppercase text-lg bg-indigo-600 shadow-xl">
               {isAnalyzing ? (
-                <>
-                  <Loader2 className="animate-spin mr-2" /> Analisando falha...
-                </>
+                <><Loader2 className="animate-spin mr-2" />{stepMessages[analyzeStep] || 'Processando...'}</>
               ) : (
-                <>
-                  <Zap className="mr-2 w-5 h-5 fill-current" /> Gerar Diagnóstico Técnico
-                </>
+                <><Zap className="mr-2 w-5 h-5 fill-current" /> Gerar Diagnóstico Técnico</>
               )}
             </Button>
           </CardContent>
@@ -399,9 +455,7 @@ export default function DiagnosticPage() {
                 <CheckCircle className="w-4 h-4" />
               </div>
               <CardHeader className="bg-green-50/50 pl-10">
-                <h3 className="text-green-800 font-black uppercase text-sm tracking-widest">
-                  Diagnóstico Concluído
-                </h3>
+                <h3 className="text-green-800 font-black uppercase text-sm tracking-widest">Diagnóstico Concluído</h3>
               </CardHeader>
               <div className="p-6 space-y-8 pl-10">
                 <div>
@@ -410,10 +464,7 @@ export default function DiagnosticPage() {
                   </h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {diagnosisResult.possible_causes.map((c, i) => (
-                      <div
-                        key={i}
-                        className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-sm text-slate-700 font-bold flex gap-3"
-                      >
+                      <div key={i} className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-sm text-slate-700 font-bold flex gap-3">
                         <span className="text-indigo-400 shrink-0">•</span>
                         <span>{renderSafeText(c)}</span>
                       </div>
@@ -426,38 +477,20 @@ export default function DiagnosticPage() {
                   </h4>
                   <div className="space-y-4">
                     {diagnosisResult.solutions.map((s, i) => (
-                      <div
-                        key={i}
-                        className="p-6 border border-indigo-50 rounded-2xl bg-white shadow-sm hover:shadow-md transition-shadow"
-                      >
+                      <div key={i} className="p-6 border border-indigo-50 rounded-2xl bg-white shadow-sm hover:shadow-md transition-shadow">
                         <div className="flex justify-between items-center mb-4">
-                          <h5 className="font-black text-slate-900 text-lg">
-                            {renderSafeText(s.title)}
-                          </h5>
-                          <Badge
-                            className={`${
-                              s.difficulty === 'Fácil'
-                                ? 'bg-green-100 text-green-700'
-                                : s.difficulty === 'Média'
-                                ? 'bg-yellow-100 text-yellow-700'
-                                : 'bg-red-100 text-red-700'
-                            } border-transparent px-3 py-1`}
-                          >
-                            {s.difficulty}
-                          </Badge>
+                          <h5 className="font-black text-slate-900 text-lg">{renderSafeText(s.title)}</h5>
+                          <Badge className={`${
+                            s.difficulty === 'Fácil'  ? 'bg-green-100 text-green-700'  :
+                            s.difficulty === 'Média'  ? 'bg-yellow-100 text-yellow-700' :
+                                                        'bg-red-100 text-red-700'
+                          } border-transparent px-3 py-1`}>{s.difficulty}</Badge>
                         </div>
                         <div className="space-y-3">
                           {s.steps.map((step, si) => (
-                            <div
-                              key={si}
-                              className="text-sm text-slate-600 flex gap-4 items-start"
-                            >
-                              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 font-black text-[10px] shrink-0">
-                                {si + 1}
-                              </span>
-                              <p className="pt-0.5 leading-relaxed font-medium">
-                                {renderSafeText(step)}
-                              </p>
+                            <div key={si} className="text-sm text-slate-600 flex gap-4 items-start">
+                              <span className="flex items-center justify-center w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 font-black text-[10px] shrink-0">{si + 1}</span>
+                              <p className="pt-0.5 leading-relaxed font-medium">{renderSafeText(step)}</p>
                             </div>
                           ))}
                         </div>
@@ -477,57 +510,22 @@ export default function DiagnosticPage() {
               <CardContent className="space-y-6 pt-6">
                 <div className="grid grid-cols-1 gap-3">
                   {[
-                    {
-                      id: 'salvar_depois',
-                      title: 'Apenas Registro',
-                      desc: 'Registrar visita sem resolução completa.',
-                    },
-                    {
-                      id: 'conforme_manual',
-                      title: 'Resolvido com IA',
-                      desc: 'O plano de ação da IA resolveu o problema.',
-                    },
-                    {
-                      id: 'forma_diferente',
-                      title: 'Resolvido (Alternativo)',
-                      desc: 'Solução encontrada fora do plano da IA.',
-                    },
+                    { id: 'salvar_depois',   title: 'Apenas Registro',        desc: 'Registrar visita sem resolução completa.' },
+                    { id: 'conforme_manual', title: 'Resolvido com IA',        desc: 'O plano de ação da IA resolveu o problema.' },
+                    { id: 'forma_diferente', title: 'Resolvido (Alternativo)', desc: 'Solução encontrada fora do plano da IA.' },
                   ].map((opt) => (
-                    <div
-                      key={opt.id}
-                      onClick={() => setResolutionType(opt.id as any)}
+                    <div key={opt.id} onClick={() => setResolutionType(opt.id as any)}
                       className={`flex items-start gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                        resolutionType === opt.id
-                          ? 'bg-indigo-600 border-indigo-400'
-                          : 'bg-slate-800 border-slate-700 hover:border-slate-600'
-                      }`}
-                    >
-                      <div
-                        className={`mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                          resolutionType === opt.id
-                            ? 'border-white bg-white'
-                            : 'border-slate-500'
-                        }`}
-                      >
-                        {resolutionType === opt.id && (
-                          <div className="w-2 h-2 rounded-full bg-indigo-600" />
-                        )}
+                        resolutionType === opt.id ? 'bg-indigo-600 border-indigo-400' : 'bg-slate-800 border-slate-700 hover:border-slate-600'
+                      }`}>
+                      <div className={`mt-1 w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                        resolutionType === opt.id ? 'border-white bg-white' : 'border-slate-500'
+                      }`}>
+                        {resolutionType === opt.id && <div className="w-2 h-2 rounded-full bg-indigo-600" />}
                       </div>
                       <div>
-                        <p
-                          className={`font-bold ${
-                            resolutionType === opt.id ? 'text-white' : 'text-slate-300'
-                          }`}
-                        >
-                          {opt.title}
-                        </p>
-                        <p
-                          className={`text-xs ${
-                            resolutionType === opt.id ? 'text-indigo-100' : 'text-slate-500'
-                          }`}
-                        >
-                          {opt.desc}
-                        </p>
+                        <p className={`font-bold ${resolutionType === opt.id ? 'text-white' : 'text-slate-300'}`}>{opt.title}</p>
+                        <p className={`text-xs ${resolutionType === opt.id ? 'text-indigo-100' : 'text-slate-500'}`}>{opt.desc}</p>
                       </div>
                     </div>
                   ))}
@@ -536,46 +534,28 @@ export default function DiagnosticPage() {
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
                       <Label className="text-slate-400">Técnico Executor *</Label>
-                      <Input
-                        className="bg-slate-800 border-slate-700 text-white focus:ring-indigo-500"
-                        placeholder="Nome completo"
-                        value={technicianName}
-                        onChange={(e) => setTechnicianName(e.target.value)}
-                      />
+                      <Input className="bg-slate-800 border-slate-700 text-white focus:ring-indigo-500"
+                        placeholder="Nome completo" value={technicianName}
+                        onChange={(e) => setTechnicianName(e.target.value)} />
                     </div>
                     {resolutionType === 'forma_diferente' && (
                       <div className="animate-in fade-in">
-                        <Label className="text-indigo-400 font-bold">
-                          Resumo da Solução Real *
-                        </Label>
-                        <Input
-                          className="bg-slate-800 border-indigo-900 text-white"
-                          placeholder="O que foi realizado de diferente?"
-                          value={actualSolution}
-                          onChange={(e) => setActualSolution(e.target.value)}
-                        />
+                        <Label className="text-indigo-400 font-bold">Resumo da Solução Real *</Label>
+                        <Input className="bg-slate-800 border-indigo-900 text-white"
+                          placeholder="O que foi realizado de diferente?" value={actualSolution}
+                          onChange={(e) => setActualSolution(e.target.value)} />
                       </div>
                     )}
                   </div>
                   <div>
                     <Label className="text-slate-400">Observações Adicionais</Label>
-                    <Textarea
-                      className="bg-slate-800 border-slate-700 text-white"
+                    <Textarea className="bg-slate-800 border-slate-700 text-white"
                       placeholder="Peças trocadas, números de série, etc..."
-                      value={attachmentNotes}
-                      onChange={(e) => setAttachmentNotes(e.target.value)}
-                    />
+                      value={attachmentNotes} onChange={(e) => setAttachmentNotes(e.target.value)} />
                   </div>
-                  <Button
-                    onClick={handleSaveFeedback}
-                    disabled={isSaving}
-                    className="w-full h-14 bg-indigo-600 font-black uppercase text-lg shadow-lg"
-                  >
-                    {isSaving ? (
-                      <Loader2 className="animate-spin" />
-                    ) : (
-                      'Finalizar e Sincronizar'
-                    )}
+                  <Button onClick={handleSaveFeedback} disabled={isSaving}
+                    className="w-full h-14 bg-indigo-600 font-black uppercase text-lg shadow-lg">
+                    {isSaving ? <Loader2 className="animate-spin" /> : 'Finalizar e Sincronizar'}
                   </Button>
                 </div>
               </CardContent>
