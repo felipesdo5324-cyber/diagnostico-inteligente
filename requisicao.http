@@ -1,0 +1,4 @@
+POST https://diagnostico-inteligente-two.vercel.app/api/embed-failure-manuals
+Content-Type: application/json
+
+{}

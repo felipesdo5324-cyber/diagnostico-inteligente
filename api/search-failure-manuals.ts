@@ -1,6 +1,6 @@
 // api/search-failure-manuals.ts
-// Etapa 2 do híbrido — busca semântica via pgvector
-// Threshold padrão: 0.65 (captura linguagem informal e variações técnicas)
+// Busca semântica via pgvector no failure_manuals
+// Threshold 0.65 — captura linguagem informal e variações técnicas
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
@@ -24,7 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const {
     relato,
-    threshold = 0.65,   // 0.65 captura linguagem informal sem gerar ruído excessivo
+    threshold = 0.65,
     marca,
     modelo,
     limit = 5,
@@ -41,14 +41,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // Gera embedding do relato do técnico
     const embeddingResponse = await openai.embeddings.create({
       model: 'text-embedding-3-small',
       input: relato.trim(),
     });
 
+    const queryEmbedding = embeddingResponse.data[0].embedding;
+
     const { data: results, error } = await supabase.rpc('match_failure_manuals', {
-      query_embedding:  embeddingResponse.data[0].embedding,
+      query_embedding:  queryEmbedding,
       match_threshold:  threshold,
       match_count:      limit,
       filter_marca:     marca  || null,
@@ -57,12 +58,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     if (error) {
-      console.error('[search-failure-manuals] RPC error:', error.message);
+      console.error('[search-failure-manuals] RPC error:', {
+        message: error.message,
+        code:    error.code,
+        hint:    error.hint,
+      });
+
+      if (error.message?.includes('match_failure_manuals') || error.code === 'PGRST202') {
+        console.warn('[search-failure-manuals] RPC não encontrada — execute migration_002_fix.sql no Supabase');
+        return res.status(200).json({
+          success: false,
+          results: [],
+          encontrou: false,
+          error: 'RPC não encontrada. Execute a migration no Supabase.',
+        });
+      }
+
       return res.status(500).json({ error: error.message });
     }
 
-    const topSimilaridade = results?.[0]?.similaridade?.toFixed(2) ?? 'N/A';
-    console.log(`[search] "${relato.slice(0, 40)}..." → ${results?.length ?? 0} resultado(s), top: ${topSimilaridade}`);
+    const topSim = results?.[0]?.similaridade?.toFixed(2) ?? 'N/A';
+    console.log(`[search] "${relato.slice(0, 50)}" → ${results?.length ?? 0} resultado(s) | top: ${topSim} | threshold: ${threshold}`);
 
     return res.status(200).json({
       success: true,
