@@ -301,12 +301,12 @@ export const dataService = {
   // ── BUSCA SEMÂNTICA (OPÇÃO B — PRINCIPAL DO HÍBRIDO) ───────────────────────
   /**
    * Busca falhas por similaridade semântica com o relato do técnico.
-   * Threshold 0.65: captura linguagem informal sem excesso de ruído.
+   * Threshold 0.55: reduz falsos negativos mantendo o fluxo híbrido atual.
    * "bba d'água vazando" → "Falha na Bomba de Transferência" (0.81) ✅
    */
   findFailuresBySimilarity: async (
     relato: string,
-    threshold = 0.65,
+    threshold = 0.55,
     marca?: string,
     modelo?: string
   ): Promise<any[]> => {

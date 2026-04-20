@@ -1,6 +1,6 @@
 // api/search-failure-manuals.ts
 // Busca semântica via pgvector no failure_manuals
-// Threshold 0.65 — captura linguagem informal e variações técnicas
+// Threshold 0.55 — reduz falsos negativos sem mudar a arquitetura
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
@@ -24,7 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const {
     relato,
-    threshold = 0.65,
+    threshold = 0.55,
     marca,
     modelo,
     limit = 5,
@@ -77,8 +77,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ error: error.message });
     }
 
-    const topSim = results?.[0]?.similaridade?.toFixed(2) ?? 'N/A';
-    console.log(`[search] "${relato.slice(0, 50)}" → ${results?.length ?? 0} resultado(s) | top: ${topSim} | threshold: ${threshold}`);
+    const topScore = typeof results?.[0]?.similaridade === 'number'
+      ? `${(results[0].similaridade * 100).toFixed(1)}%`
+      : 'N/A';
+    console.log(`[search] "${relato.slice(0, 50)}" → ${results?.length ?? 0} resultado(s) | top score: ${topScore} | threshold: ${threshold}`);
 
     return res.status(200).json({
       success: true,

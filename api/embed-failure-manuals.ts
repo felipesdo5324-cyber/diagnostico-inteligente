@@ -15,18 +15,19 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-// Texto embeddado = todos os campos relevantes concatenados
-// Quanto mais contexto, melhor a qualidade da busca semântica
+// Texto embeddado com contexto rico dos campos mais úteis para diagnóstico.
 function buildEmbedText(row: any): string {
-  return [
-    row.codigo         ? `Código: ${row.codigo}`        : '',
-    row.descricao      || row.falha     || '',
-    row.causa_provavel || '',
-    row.acao_tecnica   || row.resolucao || '',
-    row.equipamento    ? `Equipamento: ${row.equipamento}` : '',
-    row.marca          ? `Marca: ${row.marca}`           : '',
-    row.modelo         ? `Modelo: ${row.modelo}`         : '',
-  ].filter(Boolean).join('\n').trim();
+  return `
+Falha: ${row.descricao || row.falha || ''}
+
+Causa provável: ${row.causa_provavel || ''}
+
+Solução: ${row.acao_tecnica || row.resolucao || ''}
+
+Equipamento: ${row.equipamento || ''}
+Marca: ${row.marca || ''}
+Modelo: ${row.modelo || ''}
+`.trim();
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

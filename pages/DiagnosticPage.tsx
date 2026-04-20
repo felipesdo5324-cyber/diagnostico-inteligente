@@ -106,27 +106,27 @@ export default function DiagnosticPage() {
         }
       }
 
-      // ── 3. ETAPA 2: SEMÂNTICA (threshold 0.65) ────────────────────────────
+      // ── 3. ETAPA 2: SEMÂNTICA (threshold 0.55) ────────────────────────────
       if (!failureManualContext && formData.defect_description.trim()) {
         console.log('[Diagnóstico] Tentando busca semântica...');
 
        const resultadosSemanticos = await dataService.findFailuresBySimilarity(
           formData.defect_description,
-          0.65,
+          0.55,
           null, // Libera a busca para TODAS as marcas (ou use '')
           null  // Libera a busca para TODOS os modelos (ou use '')
         );
 
-        if (resultadosSemanticos.length > 0) {
-          const top = resultadosSemanticos[0];
-          console.log(`[Diagnóstico] ✅ Semântica: ${resultadosSemanticos.length} resultado(s), top: ${(top.similaridade * 100).toFixed(0)}%`);
+        const top = resultadosSemanticos[0];
+        if (top && top.similaridade > 0.55) {
+          console.log(`[Diagnóstico] ✅ Semântica válida: ${resultadosSemanticos.length} resultado(s), top: ${(top.similaridade * 100).toFixed(0)}%`);
           failureManualContext = resultadosSemanticos.slice(0, 5)
             .map((f) => `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}\nSIMILARIDADE: ${(f.similaridade * 100).toFixed(0)}%`)
             .join('\n\n---\n\n');
         }
       }
 
-      // ── 4. ETAPA 3: TRIAGE IA (fallback quando semântica < 0.65) ─────────
+      // ── 4. ETAPA 3: TRIAGE IA (fallback quando semântica não validar) ────
       if (!failureManualContext) {
         setAnalyzeStep('triagem');
         console.log('[Diagnóstico] Semântica insuficiente → Triagem IA...');
@@ -167,8 +167,9 @@ export default function DiagnosticPage() {
             sintomasStr, 0.60, null, null
           );
 
-          if (resultadosSemanticos2.length > 0) {
-            console.log(`[Diagnóstico] ✅ Semântica pós-triage: ${resultadosSemanticos2.length} resultado(s)`);
+          const top2 = resultadosSemanticos2[0];
+          if (top2 && top2.similaridade > 0.50) {
+            console.log(`[Diagnóstico] ✅ Semântica pós-triage válida: ${resultadosSemanticos2.length} resultado(s), top: ${(top2.similaridade * 100).toFixed(0)}%`);
             failureManualContext = resultadosSemanticos2.slice(0, 5)
               .map((f) => `CÓDIGO: ${f.codigo || 'N/A'}\nDESCRIÇÃO: ${f.descricao || ''}\nCAUSA PROVÁVEL: ${f.causa_provavel || ''}\nAÇÃO TÉCNICA: ${f.acao_tecnica || ''}`)
               .join('\n\n---\n\n');
