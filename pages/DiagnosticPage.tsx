@@ -110,11 +110,11 @@ export default function DiagnosticPage() {
       if (!failureManualContext && formData.defect_description.trim()) {
         console.log('[Diagnóstico] Tentando busca semântica...');
 
-        const resultadosSemanticos = await dataService.findFailuresBySimilarity(
+       const resultadosSemanticos = await dataService.findFailuresBySimilarity(
           formData.defect_description,
           0.65,
-          normalized.brand,
-          normalized.model
+          null, // Libera a busca para TODAS as marcas (ou use '')
+          null  // Libera a busca para TODOS os modelos (ou use '')
         );
 
         if (resultadosSemanticos.length > 0) {
@@ -164,7 +164,7 @@ export default function DiagnosticPage() {
           // Tenta semântica novamente com os sintomas normalizados pela triage
           const sintomasStr = triage.sintomasIdentificados.join('. ');
           const resultadosSemanticos2 = await dataService.findFailuresBySimilarity(
-            sintomasStr, 0.60, normalized.brand, normalized.model
+            sintomasStr, 0.60, null, null
           );
 
           if (resultadosSemanticos2.length > 0) {
